@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
-from . import agent, analysis, auth, db, executor, mcp_server, notify, reports, rules, scheduler, seed, secrets, terminal
+from . import agent, analysis, auth, ccswitch, db, executor, mcp_server, notify, reports, rules, scheduler, seed, secrets, terminal
 
 # 前端经 vite 代理（生产同源部署）访问 /api，浏览器永远同源 —— 不开 CORS 面
 
@@ -353,6 +353,24 @@ async def chat_stream(c: ChatIn):
             yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+# ---------- cc-switch 一键导入 ----------
+
+@app.get("/api/llm/ccswitch")
+def ccswitch_list():
+    """列出本机 cc-switch 里可导入的 provider（只读其 SQLite，不改不删）。"""
+    return ccswitch.list_providers()
+
+
+@app.post("/api/llm/ccswitch/apply")
+async def ccswitch_apply(p: dict):
+    if not p.get("base_url"):
+        raise HTTPException(400, "base_url 不能为空")
+    ccswitch.apply(p)
+    name = p.get("name") or p["base_url"]
+    await broadcast("settings", f"已从 cc-switch 导入 LLM 配置: {name}")
+    return {"ok": True}
 
 
 # ---------- LLM 端点工具：获取模型列表 + 测活（ccswitch 式） ----------

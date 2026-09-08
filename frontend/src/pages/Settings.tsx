@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, fmtTime, subscribe, type Host } from '../api'
 import { PageHead } from '../ui'
+import { Ic } from '../icons'
 
 const THRESHOLD_FIELDS: { key: string; label: string; hint: string }[] = [
   { key: 'disk_warn', label: '磁盘警告 %', hint: '默认 85' },
@@ -44,6 +45,10 @@ export default function Settings() {
   const [testingNotify, setTestingNotify] = useState(false)
   const [notifyLog, setNotifyLog] = useState<any[]>([])
   const [statusTok, setStatusTok] = useState('')
+  const [csOpen, setCsOpen] = useState(false)
+  const [csLoading, setCsLoading] = useState(false)
+  const [csList, setCsList] = useState<any[]>([])
+  const [csMsg, setCsMsg] = useState('')
   const notifyLabels = NOTIFY_LABELS
 
   const load = () => Promise.all([
@@ -102,6 +107,22 @@ export default function Settings() {
       setModelsMsg(r.ok ? `✓ 拉取到 ${r.models.length} 个模型` : `✕ ${r.error}`)
     } catch (e: any) { setModelsMsg(`✕ ${e.message}`) }
     setFetching(false)
+  }
+
+  // cc-switch 一键导入：拉本机 provider 列表 → 主题化弹窗选择 → 应用到 ai_provider
+  const openCcSwitch = () => {
+    setCsOpen(true); setCsLoading(true); setCsMsg(''); setCsList([])
+    api<{ found: boolean; reason: string; providers: any[] }>('/llm/ccswitch')
+      .then(r => { setCsList(r.providers ?? []); if (r.reason) setCsMsg(r.reason) })
+      .catch(e => setCsMsg(`读取失败: ${e.message}`))
+      .finally(() => setCsLoading(false))
+  }
+  const applyCs = (p: any) => {
+    const next = { base_url: p.base_url, model: p.model ?? '', api_key: p.api_key ?? '' }
+    setProvider((prev: any) => ({ ...prev, ...next }))
+    api('/llm/ccswitch/apply', { method: 'POST', body: JSON.stringify({ ...p }) })
+      .then(() => { setCsOpen(false); setModelsMsg(`✓ 已导入「${p.name}」，可用「连通测活」验证`) })
+      .catch(e => setCsMsg(`应用失败: ${e.message}`))
   }
   const testLlm = async () => {
     setTesting(true); setTestRes(null)
@@ -288,6 +309,9 @@ export default function Settings() {
           </div>
         </div>
         <div className="flex items-center gap-2.5 mt-3.5 flex-wrap">
+          <button className="btn btn-primary" onClick={openCcSwitch} title="读取本机 cc-switch 的供应商配置，一键填入">
+            <Ic name="download" size={13} /> 从 cc-switch 导入
+          </button>
           <button className="btn" disabled={fetching || !provider.base_url} onClick={fetchModels}>
             {fetching ? '拉取中…' : models.length ? '↻ 重新拉取模型' : '⌄ 获取模型列表'}
           </button>
@@ -521,6 +545,50 @@ export default function Settings() {
           演示主机数据由内置模拟器生成，用于故事复现。
         </p>
       </div>
+
+      {/* cc-switch 一键导入弹窗 */}
+      {csOpen && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 fade-in"
+          style={{ background: 'rgba(4,10,22,.55)', backdropFilter: 'blur(2px)' }}
+          onClick={() => setCsOpen(false)}>
+          <div className="card p-5 w-full max-w-[560px] pop-in flex flex-col" role="dialog" aria-modal="true"
+            style={{ maxHeight: '80vh' }} onClick={e => e.stopPropagation()}>
+            <div className="flex items-center gap-3 mb-1">
+              <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
+                style={{ background: 'var(--accent-dim)', border: '1px solid var(--accent-border)', color: 'var(--accent)' }}>
+                <Ic name="download" size={16} />
+              </div>
+              <div>
+                <h3 className="font-semibold text-[15px] text-[var(--text-hi)]">从 cc-switch 导入</h3>
+                <p className="text-[11.5px] text-[var(--text-faint)]">只读本机 cc-switch 配置库 · 点击条目一键填入 · 总开关不会自动打开</p>
+              </div>
+              <button className="btn btn-ghost ml-auto shrink-0" onClick={() => setCsOpen(false)}>✕</button>
+            </div>
+            <div className="flex-1 overflow-y-auto space-y-1.5 mt-3 pr-1">
+              {csLoading && <div className="text-[12.5px] text-[var(--text-faint)] py-6 text-center">读取本机 cc-switch 配置库…</div>}
+              {!csLoading && !csList.length && (
+                <div className="text-[12.5px] text-[var(--text-faint)] py-6 text-center">{csMsg || '没有可导入的条目'}</div>
+              )}
+              {csList.map((p, i) => (
+                <button key={`${p.base_url}-${i}`} onClick={() => applyCs(p)}
+                  className="w-full text-left card card-hover px-3.5 py-2.5 flex items-center gap-3">
+                  <span className="pill text-[10px] shrink-0" style={{ background: 'var(--accent-dim)', color: 'var(--accent)' }}>
+                    {({ codex: 'Codex', claude: 'Claude', gemini: 'Gemini' } as Record<string, string>)[p.app_type] ?? p.app_type}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[13px] font-semibold text-[var(--text-hi)] truncate">{p.name || p.base_url}</div>
+                    <div className="text-[11px] text-[var(--text-faint)] mono truncate">
+                      {p.base_url}{p.model ? ` · ${p.model}` : ''}
+                    </div>
+                  </div>
+                  <Ic name="play" size={12} style={{ color: 'var(--accent)', opacity: .6 }} />
+                </button>
+              ))}
+            </div>
+            {csMsg && csList.length > 0 && <div className="text-[11.5px] text-[var(--text-faint)] mt-2.5">{csMsg}</div>}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
