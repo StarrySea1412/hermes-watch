@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, type Host } from '../api'
+import { Ic } from '../icons'
 import { PageHead } from '../ui'
 
 /**
@@ -43,6 +44,10 @@ export default function Enroll() {
 
       <div className="card p-5 mb-4">
         <div className="flex items-center gap-2.5 mb-4">
+          <span className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0"
+            style={{ background: 'var(--ok-bg)', border: '1px solid var(--ok-border)', color: 'var(--ok)' }}>
+            <Ic name="zap" size={15} />
+          </span>
           <span className="pill" style={{ background: 'var(--ok-bg)', color: 'var(--ok)' }}>方式 A · 推荐</span>
           <h3 className="font-semibold text-[14.5px] text-[var(--text-hi)]">出站 Agent（beszel 式）</h3>
         </div>
@@ -110,6 +115,10 @@ export default function Enroll() {
 
       <div className="card p-5 mb-4">
         <div className="flex items-center gap-2.5 mb-3">
+          <span className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0"
+            style={{ background: 'var(--accent-dim)', border: '1px solid var(--accent-border)', color: 'var(--accent)' }}>
+            <Ic name="download" size={15} />
+          </span>
           <span className="pill" style={{ background: 'var(--accent-dim)', color: 'var(--accent)' }}>方式 B</span>
           <h3 className="font-semibold text-[14.5px] text-[var(--text-hi)]">SSH 拉取巡检</h3>
         </div>
@@ -122,6 +131,10 @@ export default function Enroll() {
 
       <div className="card p-5">
         <div className="flex items-center gap-2.5 mb-3">
+          <span className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0"
+            style={{ background: 'var(--violet-bg)', border: '1px solid var(--violet-border)', color: 'var(--violet)' }}>
+            <Ic name="globe" size={15} />
+          </span>
           <span className="pill" style={{ background: 'var(--violet-bg)', color: 'var(--violet)' }}>Bonus</span>
           <h3 className="font-semibold text-[14.5px] text-[var(--text-hi)]">把巡检数据接入任意 LLM（本地 MCP）</h3>
         </div>

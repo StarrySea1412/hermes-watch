@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { NavLink, Outlet } from 'react-router-dom'
+import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useTheme } from 'next-themes'
 import { subscribe } from './api'
 import { Ic, type IconName } from './icons'
@@ -76,6 +76,15 @@ function SidebarInner({ onNavigate }: { onNavigate?: () => void }) {
 export function Layout() {
   const [flash, setFlash] = useState('')
   const [menuOpen, setMenuOpen] = useState(false)
+  const { pathname } = useLocation()
+
+  // 浏览器标签页标题随路由同步
+  useEffect(() => {
+    const nav = NAV.find(n => n.to === pathname)
+    const name = nav?.label ?? (pathname.startsWith('/host/') ? '主机详情' : 'Hermes Watch')
+    document.title = `${name} · Hermes Watch`
+  }, [pathname])
+
   useEffect(() => {
     return subscribe(e => {
       if (e.kind === 'finding' || e.kind === 'error') {

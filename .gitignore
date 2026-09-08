@@ -2,9 +2,14 @@
 backend/.secret_key
 backend/*.db
 backend/*.db-*
+.env
 venv/
 __pycache__/
 *.pyc
 node_modules/
 dist/
 *.log
+
+# 编译产物（源码在 agent-go/main.go，二进制走 Release 发布）
+agent-go/hermes-watch-agent.exe
+agent-go/hermes-watch-agent-linux-amd64

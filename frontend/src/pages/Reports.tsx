@@ -104,7 +104,13 @@ export default function Reports() {
                 <span className="text-[13px] text-[var(--text-mute)]">
                   报告 #{viewing.id} · 整体健康分 <b className="num text-[var(--text-hi)]">{viewing.data?.overall}</b>
                 </span>
-                <a href={`/api/reports/${viewing.id}/html`} target="_blank" className="btn btn-ghost">↗ 新窗口打开</a>
+                <div className="flex gap-2.5">
+                  <button className="btn btn-ghost" title="调起浏览器打印，可另存为 PDF"
+                    onClick={() => (document.querySelector('iframe[title="report"]') as HTMLIFrameElement | null)?.contentWindow?.print()}>
+                    🖨 打印 / PDF
+                  </button>
+                  <a href={`/api/reports/${viewing.id}/html`} target="_blank" className="btn btn-ghost">↗ 新窗口打开</a>
+                </div>
               </div>
               <iframe src={`/api/reports/${viewing.id}/html`} className="w-full h-[68vh] rounded-xl border-0" title="report"
                 style={{ background: 'var(--bg-inset)' }} />

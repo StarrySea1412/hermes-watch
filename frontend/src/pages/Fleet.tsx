@@ -13,18 +13,22 @@ export default function Fleet() {
   const P = useChartPalette()
   const [hosts, setHosts] = useState<HostCard[]>([])
   const [events, setEvents] = useState<Event[]>([])
+  const [loadErr, setLoadErr] = useState('')
   const [group, setGroup] = useState<string>('全部')
   const [sort, setSort] = useState<'score' | 'name' | 'findings'>('score')
   const nav = useNavigate()
 
-  const load = () => api<{ hosts: HostCard[] }>('/fleet').then(d => setHosts(d.hosts))
+  const load = () => api<{ hosts: HostCard[] }>('/fleet')
+    .then(d => { setHosts(d.hosts); setLoadErr('') })
+    .catch(e => { if (!hosts.length) setLoadErr(e.message) })
   useEffect(() => {
     load()
-    api<Event[]>('/events?limit=14').then(setEvents)
+    api<Event[]>('/events?limit=14').then(setEvents).catch(() => { /* 首屏事件失败不打断 */ })
     return subscribe(() => {
       load()
-      api<Event[]>('/events?limit=14').then(setEvents)
+      api<Event[]>('/events?limit=14').then(setEvents).catch(() => { /* noop */ })
     })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const groups = useMemo(() => ['全部', ...Array.from(new Set(hosts.map(h => h.group)))], [hosts])
@@ -54,6 +58,16 @@ export default function Fleet() {
           生成健康报告
         </button>
       </PageHead>
+
+      {loadErr && !hosts.length && (
+        <div className="card p-10 text-center mb-4">
+          <div className="flex justify-center mb-3 text-[var(--crit)]"><Ic name="alert" size={30} sw={1.5} /></div>
+          <div className="text-[13px] text-[var(--text-mute)] mb-1">Fleet 数据加载失败</div>
+          <div className="text-[11.5px] text-[var(--text-faint)] mono mb-4">{loadErr}</div>
+          <button className="btn btn-primary" onClick={load}><Ic name="refresh" size={13} /> 重试</button>
+          <div className="text-[11px] text-[var(--text-faint)] mt-4">后端可能正在重启，稍候重试即可</div>
+        </div>
+      )}
 
       {demoCount > 0 && (
         <div className="card p-4 mb-4 flex items-center gap-4" style={{ background: 'var(--violet-bg)', borderColor: 'var(--violet-border)' }}>
@@ -161,6 +175,7 @@ export default function Fleet() {
       <div className="card p-4 mt-6">
         <div className="text-[12.5px] font-semibold text-[var(--text-mute)] mb-2.5 flex items-center gap-2">
           <span className="pulse-dot" style={{ background: 'var(--accent)' }} /> 最近事件
+          <a href="/timeline" className="ml-auto text-[11.5px] font-normal text-[var(--accent)] hover:underline">查看全部 →</a>
         </div>
         <div className="space-y-1.5">
           {events.slice(0, 6).map(e => {
