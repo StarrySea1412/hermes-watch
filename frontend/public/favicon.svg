@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#101d36"/>
+      <stop offset="1" stop-color="#0a1220"/>
+    </linearGradient>
+    <linearGradient id="frame" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#22d3ee"/>
+      <stop offset="1" stop-color="#a78bfa"/>
+    </linearGradient>
+  </defs>
+  <!-- 深色圆角底 + 青→紫品牌渐变描边 -->
+  <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#bg)" stroke="url(#frame)" stroke-width="2.5"/>
+  <!-- 观测站雷达：同心扫描环 -->
+  <circle cx="32" cy="32" r="24" fill="none" stroke="#22d3ee" stroke-width="1.4" opacity="0.18"/>
+  <circle cx="32" cy="32" r="17" fill="none" stroke="#22d3ee" stroke-width="1.8" opacity="0.4"/>
+  <circle cx="32" cy="32" r="10" fill="none" stroke="#22d3ee" stroke-width="2.2" opacity="0.9"/>
+  <!-- 扫描扇区 -->
+  <path d="M32 32 L32 8 A24 24 0 0 1 51.6 16.4 Z" fill="#22d3ee" opacity="0.15"/>
+  <!-- 目标点（健康绿） -->
+  <circle cx="43" cy="21" r="3" fill="#34d399" stroke="#0a1220" stroke-width="1"/>
+  <circle cx="32" cy="32" r="3.6" fill="#e6f6fd"/>
+</svg>

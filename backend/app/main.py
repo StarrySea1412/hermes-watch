@@ -1,0 +1,628 @@
+"""FastAPI application: REST + SSE stream + WebSocket terminal + MCP. Run: python run.py"""
+import asyncio
+import json
+import pathlib
+import re
+import time
+
+import httpx
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from pydantic import BaseModel
+
+from . import agent, analysis, auth, db, executor, mcp_server, reports, rules, scheduler, seed, secrets, terminal
+
+app = FastAPI(title="Hermes Watch", version="0.2.0")
+app.add_middleware(CORSMiddleware, allow_origins=["*"],
+                   allow_methods=["*"], allow_headers=["*"], allow_credentials=True)
+
+# 无需面板会话的路径：登录流程自身、出站 Agent（token 自鉴权）、本地 MCP（只读、仅本机）
+AUTH_OPEN = ("/api/auth/status", "/api/auth/login",
+             "/api/agent/push", "/api/agent/push/body", "/api/agent/script",
+             "/api/mcp", "/api/mcp/tools")
+
+
+@app.middleware("http")
+async def panel_auth_middleware(request: Request, call_next):
+    path = request.url.path
+    if auth.enabled() and path.startswith("/api") and path not in AUTH_OPEN:
+        if not auth.verify_session(request.cookies.get(auth.COOKIE, "")):
+            return JSONResponse({"detail": "面板未登录"}, status_code=401)
+    return await call_next(request)
+
+_subs: set[asyncio.Queue] = set()
+
+
+async def broadcast(kind: str, message: str, data: dict | None = None):
+    evt = {"ts": db.now(), "kind": kind, "message": message, "data": data or {}}
+    for q in list(_subs):
+        await q.put(json.dumps(evt, ensure_ascii=False))
+
+
+@app.on_event("startup")
+async def startup():
+    db.init_db()
+    scheduler.set_broadcaster(broadcast)
+    if seed.seed_if_empty():
+        print("[seed] demo fleet created: web-1 / db-1 / app-1 / cache-1")
+    await scheduler.collect_all()  # immediate first snapshot
+    asyncio.create_task(scheduler.loop())
+
+
+@app.get("/api/stream")
+async def stream():
+    q: asyncio.Queue = asyncio.Queue()
+
+    async def gen():
+        _subs.add(q)
+        try:
+            while True:
+                data = await q.get()
+                yield f"data: {data}\n\n"
+        finally:
+            _subs.discard(q)
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+# ---------- fleet / hosts ----------
+
+@app.get("/api/fleet")
+def fleet():
+    return analysis.fleet_snapshot()
+
+
+# ---------- 演示引导模式 ----------
+
+@app.delete("/api/demo")
+async def remove_demo_hosts():
+    """移除全部演示主机及其数据，进入真实接入模式。真实主机不受影响。"""
+    ids = [m["id"] for m in db.query("SELECT id FROM hosts WHERE mock=1")]
+    for hid in ids:
+        for table in ("metrics", "findings", "proposals", "events"):
+            db.execute(f"DELETE FROM {table} WHERE host_id=?", (hid,))
+        db.execute("DELETE FROM hosts WHERE id=?", (hid,))
+    await broadcast("host", f"已移除 {len(ids)} 台演示主机，切换到真实接入模式")
+    return {"removed": len(ids)}
+
+
+@app.post("/api/demo/seed")
+async def seed_demo_hosts_ep():
+    """恢复演示引导（真实主机保留，演示机并列加入）。"""
+    if db.query_one("SELECT id FROM hosts WHERE mock=1"):
+        raise HTTPException(400, "演示主机已存在")
+    n = seed.seed_demo_hosts()
+    await broadcast("host", f"已恢复 {n} 台演示引导主机")
+    return {"seeded": n}
+
+
+class HostIn(BaseModel):
+    name: str
+    hostname: str
+    port: int = 22
+    username: str = "root"
+    secret: str = ""
+    group_name: str = "default"
+
+
+@app.post("/api/hosts")
+async def add_host(h: HostIn):
+    if db.query_one("SELECT id FROM hosts WHERE name=?", (h.name,)):
+        raise HTTPException(400, "同名主机已存在")
+    hid = db.execute(
+        "INSERT INTO hosts(name,hostname,port,username,secret,group_name,mock,created_at) "
+        "VALUES(?,?,?,?,?,?,0,?)", (h.name, h.hostname, h.port, h.username,
+                                    secrets.encrypt(h.secret), h.group_name, db.now()))
+    await broadcast("host", f"新增主机 {h.name}")
+    return {"id": hid}
+
+
+@app.delete("/api/hosts/{hid}")
+async def del_host(hid: int):
+    db.execute("DELETE FROM hosts WHERE id=?", (hid,))
+    db.execute("DELETE FROM metrics WHERE host_id=?", (hid,))
+    return {"ok": True}
+
+
+@app.get("/api/hosts/{hid}")
+def host_detail(hid: int, range_min: int = 240):
+    h = db.query_one("SELECT * FROM hosts WHERE id=?", (hid,))
+    if not h:
+        raise HTTPException(404, "主机不存在")
+    metrics = db.query(
+        "SELECT ts,cpu,mem,disk,net_in,net_out,load1 FROM metrics WHERE host_id=? AND ts>? ORDER BY ts",
+        (hid, db.now() - range_min * 60))
+    findings = db.query(
+        "SELECT * FROM findings WHERE host_id=? AND status IN ('open','analyzed') ORDER BY ts DESC", (hid,))
+    for f in findings:
+        f["evidence"] = db.uj(f["evidence"], {})
+        f["card"] = db.uj(f["card"], None)
+    extras = {}
+    if h["mock"]:
+        from .collector import mock_extras
+        extras = mock_extras(dict(h))
+    elif h.get("last_extras"):
+        extras = db.uj(h["last_extras"], {})  # Go agent 推送的最新 extras
+    return {"host": {**h, "secret": ""}, "metrics": metrics, "findings": findings, "extras": extras}
+
+
+# ---------- findings / analysis / proposals ----------
+
+@app.get("/api/findings")
+def findings(status: str = "open,analyzed,resolved"):
+    # resolved 也返回：诊断列表要能看到"已解决 ✓"的发现及其执行审计
+    rows = db.query(
+        "SELECT f.*, h.name AS host_name FROM findings f JOIN hosts h ON h.id=f.host_id "
+        f"WHERE f.status IN ({','.join('?' * len(status.split(',')))}) "
+        "ORDER BY CASE f.severity WHEN 'crit' THEN 0 WHEN 'warn' THEN 1 ELSE 2 END, f.ts DESC",
+        tuple(status.split(",")))
+    for r in rows:
+        r["evidence"] = db.uj(r["evidence"], {})
+        r["card"] = db.uj(r["card"], None)
+    return rows
+
+
+@app.post("/api/findings/{fid}/analyze")
+async def analyze(fid: int):
+    f = db.query_one("SELECT * FROM findings WHERE id=?", (fid,))
+    if not f:
+        raise HTTPException(404, "finding 不存在")
+    h = db.query_one("SELECT * FROM hosts WHERE id=?", (f["host_id"],))
+    card = await analysis.analyze_finding(h, f)
+    await broadcast("analysis", f"agent 完成诊断: {f['title']}", {"finding_id": fid})
+    if f["severity"] == "crit":
+        await notify("诊断完成", f"{h['name']}: {f['title']} → {card.get('root_cause', '')[:80]}")
+    return card
+
+
+class Decision(BaseModel):
+    action: str  # approve | reject
+
+
+@app.post("/api/proposals/{pid}/decide")
+async def decide(pid: int, d: Decision):
+    p = db.query_one("SELECT * FROM proposals WHERE id=?", (pid,))
+    if not p:
+        raise HTTPException(404, "proposal 不存在")
+    if p["status"] != "pending":
+        raise HTTPException(400, "该提案已处理")
+    if d.action not in ("approve", "reject"):
+        raise HTTPException(400, "action 必须是 approve/reject")
+    status = "approved" if d.action == "approve" else "rejected"
+    db.execute("UPDATE proposals SET status=?, decided_at=? WHERE id=?", (status, db.now(), pid))
+    # 注意：批准 ≠ 解决。发现保持 analyzed（列表可见），执行成功后才转 resolved
+    h = db.query_one("SELECT hostname FROM hosts WHERE id=?", (p["host_id"],))
+    await broadcast("proposal", f"提案{'已批准' if status == 'approved' else '已拒绝'}: {p['title']}"
+                    + (f"（演示环境，命令未实际执行于 {h['hostname']}）" if h else ""),
+                    {"proposal_id": pid})
+    return {"ok": True, "status": status}
+
+
+@app.get("/api/proposals")
+def proposals():
+    rows = db.query(
+        "SELECT p.*, h.name AS host_name, h.mock AS host_mock FROM proposals p JOIN hosts h ON h.id=p.host_id "
+        "ORDER BY p.ts DESC LIMIT 50")
+    runs = executor.runs_for([r["id"] for r in rows])
+    for r in rows:
+        r["runs"] = runs.get(r["id"], [])
+        r["exec_enabled"] = executor.exec_enabled()
+    return rows
+
+
+@app.post("/api/proposals/{pid}/execute")
+async def execute_proposal(pid: int):
+    """批准之后的显式执行动作（与 decide 分离）：白名单校验 + 超时 + 全审计。"""
+    p = db.query_one("SELECT * FROM proposals WHERE id=?", (pid,))
+    if not p:
+        raise HTTPException(404, "proposal 不存在")
+    if p["status"] != "approved":
+        raise HTTPException(400, "只能执行已批准的提案")
+    h = db.query_one("SELECT * FROM hosts WHERE id=?", (p["host_id"],))
+    if not h:
+        raise HTTPException(404, "主机不存在")
+    run = await executor.execute(p, dict(h))
+    await broadcast("exec", f"提案 #{pid} 执行{'' if run['status'] == 'ok' else '失败'}"
+                    f"（{run['status']}）: {p['title']}", {"proposal_id": pid, "run_id": run["id"]})
+    if run["status"] == "ok" and p["finding_id"]:
+        # 执行成功 → 发现真正解决
+        db.execute("UPDATE findings SET status='resolved' WHERE id=?", (p["finding_id"],))
+    elif run["status"] != "ok" and p["finding_id"]:
+        # 执行失败/超时 → 发现保持 analyzed，回到待处理
+        db.execute("UPDATE findings SET status='analyzed' WHERE id=? AND status='resolved'",
+                   (p["finding_id"],))
+    return run
+
+
+# ---------- events / reports / settings ----------
+
+@app.get("/api/events")
+def events(limit: int = 80):
+    rows = db.query(
+        "SELECT e.*, h.name AS host_name FROM events e LEFT JOIN hosts h ON h.id=e.host_id "
+        "ORDER BY e.ts DESC LIMIT ?", (limit,))
+    for r in rows:
+        r["data"] = db.uj(r["data"], {})
+    return rows
+
+
+@app.post("/api/reports/generate")
+async def gen_report(kind: str = "manual"):
+    r = reports.generate(kind)
+    await broadcast("report", f"健康报告已生成（整体 {r['overall']} 分）", r)
+    return r
+
+
+@app.get("/api/reports")
+def list_reports():
+    return reports.list_reports()
+
+
+@app.get("/api/reports/{rid}/html", response_class=HTMLResponse)
+def report_html(rid: int):
+    r = db.query_one("SELECT content_html FROM reports WHERE id=?", (rid,))
+    if not r:
+        raise HTTPException(404)
+    return r["content_html"]
+
+
+@app.delete("/api/reports/{rid}")
+async def report_delete(rid: int):
+    db.execute("DELETE FROM reports WHERE id=?", (rid,))
+    await broadcast("report", f"报告 #{rid} 已删除")
+    return {"ok": True}
+
+
+@app.delete("/api/reports")
+async def reports_clear():
+    n = db.query_one("SELECT COUNT(*) AS n FROM reports")["n"]
+    db.execute("DELETE FROM reports")
+    await broadcast("report", f"已一键清空全部报告（{n} 份）")
+    return {"ok": True, "removed": n}
+
+
+@app.get("/api/settings")
+def get_settings():
+    rows = dict((r["key"], r["value"]) for r in db.query("SELECT key,value FROM settings"))
+    rows.setdefault("ai_outbound", "off")
+    return rows
+
+
+@app.post("/api/settings")
+async def set_settings(payload: dict):
+    for k, v in payload.items():
+        if k.startswith("panel_"):
+            continue  # 口令/开关走 /api/auth/*，不允许经通用设置端点篡改
+        db.execute("INSERT INTO settings(key,value) VALUES(?,?) "
+                   "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (k, str(v)))
+        if k == "ai_outbound":
+            await broadcast("settings", f"AI 外发已{'开启' if str(v) == 'on' else '关闭'}")
+    return {"ok": True}
+
+
+# ---------- AI chat ----------
+
+class ChatIn(BaseModel):
+    question: str
+    history: list[dict] = []   # 多轮对话上下文：[{role:'user'|'assistant', content}...]
+
+
+@app.post("/api/chat")
+async def chat(c: ChatIn):
+    return await analysis.chat_answer(c.question.strip()[:500], c.history)
+
+
+# ---------- LLM 端点工具：获取模型列表 + 测活（ccswitch 式） ----------
+
+# 已知「Anthropic 协议兼容子路径」后缀：base URL 命中时额外追加剥离后缀的候选
+# （DeepSeek/Kimi/GLM 等把 OpenAI 兼容端点挂在别的路径下的场景）
+_COMPAT_SUFFIXES = ("/api/claudecode", "/api/anthropic", "/apps/anthropic",
+                    "/api/coding", "/claudecode", "/anthropic", "/coding", "/claude")
+
+
+def _models_url_candidates(base_url: str) -> list[str]:
+    b = base_url.strip().rstrip("/")
+    if not b:
+        return []
+    m = re.search(r"/v\d+$", b)
+    # 已以版本段结尾（/v1、智谱 /v4 等）→ OpenAI 惯例是 {base}/models，不能再补 /v1
+    cands = [f"{b}/models"] if m else [f"{b}/v1/models"]
+    if m and not b.endswith("/v1"):
+        cands.append(f"{b}/v1/models")
+    for suf in _COMPAT_SUFFIXES:
+        if b.endswith(suf):
+            root = b[:-len(suf)].rstrip("/")
+            cands += [f"{root}/v1/models", f"{root}/models"]
+            break
+    return list(dict.fromkeys(cands))
+
+
+class LlmProbeIn(BaseModel):
+    base_url: str = ""
+    api_key: str = ""
+    model: str = ""
+
+
+def _llm_headers(api_key: str) -> dict:
+    return {"Authorization": f"Bearer {api_key}"} if api_key.strip() else {}
+
+
+@app.post("/api/llm/models")
+async def llm_models(p: LlmProbeIn):
+    """拉取 OpenAI 兼容模型列表：GET {base}/models，候选 URL 按序尝试，404/405 换下一个。"""
+    tried, models, last = [], [], "Base URL 未填写"
+    for url in _models_url_candidates(p.base_url)[:3]:
+        tried.append(url)
+        try:
+            async with httpx.AsyncClient(timeout=15) as cli:
+                r = await cli.get(url, headers=_llm_headers(p.api_key))
+            if r.status_code in (404, 405):
+                last = f"HTTP {r.status_code}"
+                continue
+            r.raise_for_status()
+            data = r.json().get("data") or []
+            models = sorted({str(m["id"]) for m in data if isinstance(m, dict) and m.get("id")})
+            last = None
+            break
+        except Exception as e:
+            last = f"{type(e).__name__}: {e}"
+    return {"ok": bool(models), "models": models, "tried": tried, "error": last}
+
+
+@app.post("/api/llm/test")
+async def llm_test(p: LlmProbeIn):
+    """测活：对 {base}/chat/completions 发一次真实最小生成请求并计时。
+    与诊断叙事走完全相同的路径，通了就代表 AI 叙事可用。"""
+    base = p.base_url.strip().rstrip("/")
+    if not base:
+        raise HTTPException(400, "Base URL 未填写")
+    headers = _llm_headers(p.api_key)
+    url = f"{base}/chat/completions"
+    payload = {"model": p.model.strip() or "gpt-4o-mini",
+               "messages": [{"role": "user", "content": "ping"}],
+               "max_tokens": 1, "stream": False}
+    async with httpx.AsyncClient(timeout=30) as cli:
+        try:
+            await cli.post(url, headers=headers, json=payload)  # 热身：复用连接，去掉首包惩罚
+        except Exception:
+            pass
+        t0 = time.perf_counter()
+        try:
+            r = await cli.post(url, headers=headers, json=payload)
+            ms = int((time.perf_counter() - t0) * 1000)
+            if r.status_code >= 400:
+                return {"ok": False, "latency_ms": ms, "status": r.status_code,
+                        "error": (r.text or "").strip()[:300]}
+            reply = ""
+            try:
+                reply = (r.json()["choices"][0]["message"]["content"] or "").strip()[:200]
+            except Exception:
+                pass
+            return {"ok": True, "latency_ms": ms, "status": r.status_code,
+                    "model": p.model.strip(), "reply": reply}
+        except httpx.TimeoutException:
+            return {"ok": False, "latency_ms": int((time.perf_counter() - t0) * 1000),
+                    "error": "请求超时（30s）"}
+        except Exception as e:
+            return {"ok": False, "latency_ms": int((time.perf_counter() - t0) * 1000),
+                    "error": f"{type(e).__name__}: {e}"}
+
+
+# ---------- panel auth ----------
+
+class PasswordIn(BaseModel):
+    password: str
+
+
+class ChangePwIn(BaseModel):
+    old: str
+    new: str
+
+
+@app.get("/api/auth/status")
+async def auth_status(request: Request):
+    return {"enabled": auth.enabled(),
+            "authenticated": auth.verify_session(request.cookies.get(auth.COOKIE, ""))}
+
+
+@app.post("/api/auth/login")
+async def auth_login(p: PasswordIn, request: Request):
+    ip = request.client.host if request.client else "?"
+    if auth.too_many_fails(ip):
+        raise HTTPException(429, "尝试过于频繁，请 1 分钟后再试")
+    if not auth.verify_password(p.password):
+        auth.record_fail(ip)
+        raise HTTPException(401, "口令错误")
+    resp = JSONResponse({"ok": True})
+    resp.set_cookie(auth.COOKIE, auth.make_session(), max_age=auth.TTL,
+                    httponly=True, samesite="lax", path="/")
+    return resp
+
+
+@app.post("/api/auth/logout")
+async def auth_logout():
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(auth.COOKIE, path="/")
+    return resp
+
+
+@app.post("/api/auth/enable")
+async def auth_enable(p: PasswordIn):
+    if auth.enabled():
+        raise HTTPException(400, "访问控制已开启")
+    if len(p.password) < 4:
+        raise HTTPException(400, "口令至少 4 位")
+    auth.set_password(p.password)
+    db.execute("INSERT INTO settings(key,value) VALUES('panel_auth','on') "
+               "ON CONFLICT(key) DO UPDATE SET value='on'")
+    await broadcast("settings", "面板访问控制已开启")
+    return {"ok": True}
+
+
+@app.post("/api/auth/disable")
+async def auth_disable(p: PasswordIn, request: Request):
+    if not auth.enabled():
+        raise HTTPException(400, "访问控制未开启")
+    if not auth.verify_password(p.password):
+        raise HTTPException(401, "口令错误")
+    db.execute("UPDATE settings SET value='off' WHERE key='panel_auth'")
+    await broadcast("settings", "面板访问控制已关闭")
+    return {"ok": True}
+
+
+@app.post("/api/auth/change")
+async def auth_change(c: ChangePwIn):
+    if not auth.enabled():
+        raise HTTPException(400, "访问控制未开启")
+    if not auth.verify_password(c.old):
+        raise HTTPException(401, "旧口令错误")
+    if len(c.new) < 4:
+        raise HTTPException(400, "新口令至少 4 位")
+    auth.set_password(c.new)
+    await broadcast("settings", "面板口令已更换")
+    return {"ok": True}
+
+
+# ---------- webhook notifications ----------
+
+async def notify(kind: str, text: str):
+    url_row = db.query_one("SELECT value FROM settings WHERE key='webhook_url'")
+    url = (url_row or {}).get("value") or ""
+    if not url.startswith("http"):
+        return
+    body = {"msgtype": "text", "text": {"content": f"[Hermes Watch] {kind}: {text}"}}
+    try:
+        async with httpx.AsyncClient(timeout=8) as cli:
+            await cli.post(url, json=body)
+    except Exception:
+        pass
+
+
+# ---------- web terminal (WebSocket) ----------
+
+@app.websocket("/ws/terminal/{hid}")
+async def ws_terminal(ws: WebSocket, hid: int):
+    await ws.accept()
+    if auth.enabled() and not auth.verify_session(ws.cookies.get(auth.COOKIE, "")):
+        await ws.send_text("面板未登录，终端连接被拒绝\r\n")
+        await ws.close()
+        return
+    h = db.query_one("SELECT * FROM hosts WHERE id=?", (hid,))
+    if not h:
+        await ws.send_text("主机不存在\r\n")
+        await ws.close()
+        return
+    host = dict(h)
+    if host.get("mock"):
+        shell = terminal.MockShell(host)
+        await ws.send_text(shell.banner + shell.prompt())
+        buf = ""
+        try:
+            while True:
+                buf += await ws.receive_text()
+                while "\r" in buf or "\n" in buf:
+                    line, _, buf = (buf.replace("\n", "\r").partition("\r")
+                                    if "\r" in buf else buf.partition("\n"))
+                    out = shell.feed(line)
+                    await ws.send_text(out + ("\r\n" if out else "") + "\r\n" + shell.prompt())
+        except WebSocketDisconnect:
+            return
+    else:
+        if terminal.asyncssh is None:
+            await ws.send_text("asyncssh 未安装，无法连接真实主机\r\n")
+            await ws.close()
+            return
+        try:
+            await terminal.ssh_session(ws, host)
+        except Exception as e:
+            try:
+                await ws.send_text(f"\r\nSSH 连接失败: {type(e).__name__}: {e}\r\n")
+                await ws.close()
+            except Exception:
+                pass
+
+
+# ---------- outbound agent endpoints (beszel-style) ----------
+
+@app.post("/api/hosts/{hid}/agent-token")
+async def gen_agent_token(hid: int):
+    if not db.query_one("SELECT id FROM hosts WHERE id=?", (hid,)):
+        raise HTTPException(404, "主机不存在")
+    token = agent.new_token()
+    db.execute("UPDATE hosts SET agent_token=? WHERE id=?", (token, hid))
+    await broadcast("host", f"已为 #{hid} 生成出站 Agent Token", {"host_id": hid})
+    return {"token": token}
+
+
+@app.get("/api/agent/script", response_class=PlainTextResponse)
+def agent_script():
+    return agent.AGENT_SCRIPT
+
+
+@app.post("/api/agent/push")
+async def agent_push(authorization: str = ""):
+    token = agent.parse_secret_token(authorization)
+    h = agent.host_by_token(token)
+    if not h:
+        raise HTTPException(401, "无效 agent token")
+    # body parsed lazily to give a clean 401 before touching it
+    return {"ok": True, "host": h["name"]}
+
+
+@app.post("/api/agent/push/body")
+async def agent_push_body(request: Request):
+    """agent 指标推送。两种鉴权：
+    - Go 二进制：X-HW-Token + X-HW-Signature(HMAC-SHA256) + X-HW-Timestamp 防重放
+    - sh 脚本：token 在 body 中（最简 curl 演示）
+    extras（进程/失败服务/证书）随包上报，入库并驱动规则引擎产生发现。"""
+    raw = await request.body()
+    try:
+        data = json.loads(raw or b"{}") or {}
+    except json.JSONDecodeError:
+        raise HTTPException(400, "bad json")
+    token = request.headers.get("x-hw-token") or data.get("token", "")
+    h = agent.host_by_token(token)
+    if not h:
+        raise HTTPException(401, "无效 agent token")
+    sig = request.headers.get("x-hw-signature")
+    if sig:  # 签名通道：验签 + 时间戳防重放
+        if not agent.verify_signature(token, raw, request.headers.get("x-hw-timestamp", ""), sig):
+            raise HTTPException(401, "签名无效或时间戳过期")
+    m = {k: float(data.get(k, 0) or 0) for k in
+         ("cpu", "mem", "disk", "load1", "net_in", "net_out")}
+    db.execute(
+        "INSERT INTO metrics(host_id,ts,cpu,mem,disk,net_in,net_out,load1) VALUES(?,?,?,?,?,?,?,?)",
+        (h["id"], db.now(), m["cpu"], m["mem"], m["disk"], m["net_in"], m["net_out"], m["load1"]))
+    extras = data.get("extra") or {}
+    if extras:
+        db.execute("UPDATE hosts SET last_extras=? WHERE id=?", (db.j(extras), h["id"]))
+    prev_open = {f["type"] for f in db.query(
+        "SELECT type FROM findings WHERE host_id=? AND status IN ('open','analyzed')", (h["id"],))}
+    for f in rules.evaluate(h, m, extras):
+        if f["type"] in prev_open:
+            continue
+        fid = db.execute(
+            "INSERT INTO findings(host_id,ts,type,severity,title,detail,evidence) VALUES(?,?,?,?,?,?,?)",
+            (f["host_id"], f["ts"], f["type"], f["severity"], f["title"], f["detail"], db.j(f["evidence"])))
+        await broadcast("finding", f"[{f['severity'].upper()}] {f['title']}", {"finding_id": fid})
+        await notify("发现告警", f"{h['name']}: {f['title']}")
+    await broadcast("host", f"{h['name']} agent 指标已上报", {"host_id": h["id"]})
+    return {"ok": True}
+
+
+# ---------- local MCP server (streamable HTTP, read-only) ----------
+
+@app.post("/api/mcp")
+async def mcp_endpoint(body: dict):
+    return mcp_server.handle(body)
+
+
+@app.get("/api/mcp/tools")
+def mcp_tools():
+    return mcp_server.TOOLS
+
+
+def run():
+    import uvicorn
+    uvicorn.run(app, host="127.0.0.1", port=8800, log_level="warning")

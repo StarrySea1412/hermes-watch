@@ -1,0 +1,10 @@
+# 密钥与数据库不入库
+backend/.secret_key
+backend/*.db
+backend/*.db-*
+venv/
+__pycache__/
+*.pyc
+node_modules/
+dist/
+*.log
