@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useState } from 'react'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { api } from './api'
 import { Layout } from './ui'
+import { ErrorBoundary } from './ErrorBoundary'
 import Login from './pages/Login'
 
 // 路由级代码分割：每页独立 chunk，echarts 只跟随用到图表的页面异步加载
@@ -36,22 +37,24 @@ function Gate() {
   if (state === 'loading') return null
   if (state === 'locked') return <Login />
   return (
-    <Suspense fallback={<PageFallback />}>
-      <Routes>
-        <Route element={<Layout />}>
-          <Route path="/" element={<Fleet />} />
-          <Route path="/topology" element={<Topology />} />
-          <Route path="/chat" element={<Chat />} />
-          <Route path="/host/:id" element={<HostDetail />} />
-          <Route path="/timeline" element={<Timeline />} />
-          <Route path="/diagnostics" element={<Diagnostics />} />
-          <Route path="/reports" element={<Reports />} />
-          <Route path="/terminal" element={<TerminalPage />} />
-          <Route path="/enroll" element={<Enroll />} />
-          <Route path="/settings" element={<Settings />} />
-        </Route>
-      </Routes>
-    </Suspense>
+    <ErrorBoundary>
+      <Suspense fallback={<PageFallback />}>
+        <Routes>
+          <Route element={<Layout />}>
+            <Route path="/" element={<Fleet />} />
+            <Route path="/topology" element={<Topology />} />
+            <Route path="/chat" element={<Chat />} />
+            <Route path="/host/:id" element={<HostDetail />} />
+            <Route path="/timeline" element={<Timeline />} />
+            <Route path="/diagnostics" element={<Diagnostics />} />
+            <Route path="/reports" element={<Reports />} />
+            <Route path="/terminal" element={<TerminalPage />} />
+            <Route path="/enroll" element={<Enroll />} />
+            <Route path="/settings" element={<Settings />} />
+          </Route>
+        </Routes>
+      </Suspense>
+    </ErrorBoundary>
   )
 }
 

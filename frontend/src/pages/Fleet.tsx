@@ -43,6 +43,7 @@ export default function Fleet() {
   const avg = hosts.length ? Math.round(hosts.reduce((s, h) => s + h.score, 0) / hosts.length) : 100
   const findings = hosts.reduce((s, h) => s + h.open_findings, 0)
   const critHosts = hosts.filter(h => h.status === 'crit').length
+  const offlineHosts = hosts.filter(h => h.status === 'offline').length
   const demoCount = hosts.filter(h => h.mock).length
   const groupColor = (g: string) => P[GROUP_ORDER[Math.max(0, groups.indexOf(g)) % GROUP_ORDER.length]] ?? P['--accent'] ?? '#22d3ee'
 
@@ -98,7 +99,11 @@ export default function Fleet() {
         <Stat label="Fleet 整体健康分" value={avg} hint={`${critHosts} 台严重 · ${findings} 条待处理`} accent={avg >= 90 ? 'var(--ok)' : avg >= 70 ? 'var(--warn)' : 'var(--crit)'} />
         <Stat label="健康主机" value={<span>{hosts.filter(h => h.status === 'ok').length}<span className="text-[14px] text-[var(--text-faint)]"> / {hosts.length}</span></span>} accent="var(--ok)" />
         <Stat label="待处理发现" value={findings} accent={findings ? 'var(--warn)' : 'var(--text-mute)'} hint="点击主机卡片查看诊断" />
-        <Stat label="巡检状态" value={<span className="flex items-center gap-2 text-[18px]"><span className="pulse-dot" style={{ background: 'var(--ok)' }} />运行中</span>} hint="60s 周期 · SSE 实时推送" />
+        <Stat label="巡检状态" value={
+          offlineHosts
+            ? <span className="flex items-center gap-2 text-[18px]"><span className="pulse-dot" style={{ background: 'var(--crit)' }} />{offlineHosts} 台离线</span>
+            : <span className="flex items-center gap-2 text-[18px]"><span className="pulse-dot" style={{ background: 'var(--ok)' }} />运行中</span>
+        } hint="60s 周期 · SSE 实时推送" />
       </div>
 
       <div className="flex items-center gap-2 mb-4 flex-wrap">
@@ -126,11 +131,13 @@ export default function Fleet() {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         {shown.map((h, i) => {
-          const color = h.status === 'ok' ? (P['--ok'] ?? '#34d399') : h.status === 'warn' ? (P['--warn'] ?? '#fbbf24') : (P['--crit'] ?? '#f87171')
+          const color = h.status === 'offline' ? (P['--text-faint'] ?? '#64748b')
+            : h.status === 'ok' ? (P['--ok'] ?? '#34d399') : h.status === 'warn' ? (P['--warn'] ?? '#fbbf24') : (P['--crit'] ?? '#f87171')
           return (
             <div key={h.id} className="card card-hover p-4 cursor-pointer rise-in"
-              style={{ animationDelay: `${Math.min(i, 8) * 45}ms` }}
-              onClick={() => nav(`/host/${h.id}`)}>
+              style={{ animationDelay: `${Math.min(i, 8) * 45}ms`, opacity: h.status === 'offline' ? 0.72 : undefined }}
+              onClick={() => nav(`/host/${h.id}`)}
+              title={h.status === 'offline' && h.last_error ? `最近采集错误: ${h.last_error}` : undefined}>
               <div className="flex items-start justify-between">
                 <div>
                   <div className="font-semibold text-[14.5px] text-[var(--text-hi)] flex items-center gap-2">
@@ -142,8 +149,10 @@ export default function Fleet() {
                   <div className="text-[11.5px] text-[var(--text-faint)] mt-0.5 mono">{h.hostname}</div>
                 </div>
                 <span className="pill" style={{ background: alpha(color, 0.09), color, border: `1px solid ${alpha(color, 0.2)}` }}>
-                  <span className="w-1.5 h-1.5 rounded-full" style={{ background: color }} />
-                  {h.status === 'ok' ? '健康' : h.status === 'warn' ? '警告' : '严重'}
+                  {h.status === 'offline'
+                    ? <span className="flex items-center gap-1"><Ic name="wifi-off" size={11} /> 离线</span>
+                    : <><span className="w-1.5 h-1.5 rounded-full" style={{ background: color }} />
+                      {h.status === 'ok' ? '健康' : h.status === 'warn' ? '警告' : '严重'}</>}
                 </span>
               </div>
               <div className="flex items-center gap-3 mt-2">
@@ -165,7 +174,11 @@ export default function Fleet() {
               <div className="mt-2"><Spark data={h.spark} metric="disk" color={color} /></div>
               <div className="text-[11px] text-[var(--text-faint)] mt-1.5 flex justify-between">
                 <span>发现 <span className={h.open_findings ? 'text-[var(--warn)] font-semibold' : ''}>{h.open_findings}</span></span>
-                <span>{fmtTime(h.latest?.ts ?? 0).slice(-8)} 采集</span>
+                <span className={h.status === 'offline' ? 'text-[var(--crit)]' : ''}>
+                  {h.status === 'offline'
+                    ? `失联 · 最后采集 ${fmtTime(h.last_ok_ts || h.latest?.ts || 0).slice(-8)}`
+                    : `${fmtTime(h.latest?.ts ?? 0).slice(-8)} 采集`}
+                </span>
               </div>
             </div>
           )

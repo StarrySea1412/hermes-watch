@@ -334,3 +334,95 @@ def list_reports(limit=20):
     for r in rows:
         r["data"] = db.uj(r["data"], {})
     return rows
+
+
+def render_status_page(snap: dict) -> str:
+    """公开状态页（带 token 只读分享）：健康概览 + 主机状态 + 未处理发现标题。
+    刻意不包含：主机 IP/地址、SSH 凭据、证据链输出、终端入口。自动刷新 60s。"""
+    hosts = snap["hosts"]
+    scores = [h["score"] for h in hosts] or [100]
+    overall = round(sum(scores) / len(scores))
+    color, verdict = _verdict(overall)
+    gen_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(snap.get("generated_at") or time.time()))
+
+    STATUS_LABEL = {"ok": ("运行正常", "#22c55e"), "warn": ("需要关注", "#f59e0b"),
+                    "crit": ("需要处置", "#ef4444"), "offline": ("离线", "#94a3b8")}
+    cards = []
+    for h in hosts:
+        l = h.get("latest") or {}
+        label, c = STATUS_LABEL.get(h["status"], STATUS_LABEL["ok"])
+        def _bar(v, name):
+            if v is None:
+                return ""
+            hot = v >= 85
+            return (f'<div class="metric"><span>{name}</span>'
+                    f'<div class="bar"><i style="width:{min(100, v):.0f}%;background:var(--m-{name.lower()})"></i></div>'
+                    f'<b class="{"hot" if hot else ""}">{v:.0f}%</b></div>')
+        cards.append(f"""
+      <div class="host">
+        <div class="hrow"><b>{html.escape(h['name'])}</b>
+          <span class="chip" style="color:{c};border-color:{c}55;background:{c}18">{label}</span>
+          <span class="score" style="color:{c}">{h['score']}</span></div>
+        {_bar(l.get('cpu'), 'CPU')}{_bar(l.get('mem'), '内存')}{_bar(l.get('disk'), '磁盘')}
+      </div>""")
+
+    fs = db.query(
+        "SELECT f.severity, f.title, h.name AS host_name FROM findings f "
+        "JOIN hosts h ON h.id=f.host_id WHERE f.status IN ('open','analyzed') "
+        "ORDER BY CASE f.severity WHEN 'crit' THEN 0 WHEN 'warn' THEN 1 ELSE 2 END, f.ts DESC LIMIT 12")
+    finding_rows = "".join(
+        f'<li><span class="dot" style="background:{SEV_COLOR.get(f["severity"], "#888")}"></span>'
+        f'{html.escape(f["title"])}<em>{html.escape(f["host_name"])}</em></li>'
+        for f in fs) or '<li class="none">当前没有待处理的发现 —— 一切正常</li>'
+
+    return f"""<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="refresh" content="60">
+<title>Hermes Watch · 服务状态</title>
+<style>
+  :root {{ color-scheme: light dark; --bg:#f4f5f7; --panel:#ffffff; --text:#1a2333; --mute:#64748b;
+          --line:#e2e8f0; --m-cpu:#0ea5e9; --m-内存:#8b5cf6; --m-cpu2:#0ea5e9; --m-磁盘:#f59e0b; --m-内存2:#8b5cf6; }}
+  @media (prefers-color-scheme: dark) {{
+    :root {{ --bg:#0a0f1c; --panel:#101828; --text:#e6edf7; --mute:#8fa3bd; --line:#223049;
+            --m-cpu:#38bdf8; --m-磁盘:#fbbf24; }}
+  }}
+  * {{ box-sizing:border-box; }}
+  body {{ margin:0; padding:32px 16px; background:var(--bg); color:var(--text);
+         font:14px/1.6 "PingFang SC","Microsoft YaHei",system-ui,sans-serif; }}
+  .page {{ max-width:760px; margin:0 auto; }}
+  .head {{ display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; }}
+  h1 {{ font-size:20px; margin:0; letter-spacing:.5px; }}
+  .verdict {{ font-size:26px; font-weight:700; color:{color}; }}
+  .meta {{ color:var(--mute); font-size:12px; margin:6px 0 22px; }}
+  .host {{ background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px 16px; margin-bottom:10px; }}
+  .hrow {{ display:flex; align-items:center; gap:10px; margin-bottom:8px; }}
+  .hrow b {{ font-size:15px; }}
+  .chip {{ margin-left:auto; font-size:11px; padding:2px 9px; border-radius:99px; border:1px solid; }}
+  .score {{ font-size:18px; font-weight:700; font-variant-numeric:tabular-nums; }}
+  .metric {{ display:flex; align-items:center; gap:10px; margin-top:5px; font-size:12px; color:var(--mute); }}
+  .metric span {{ width:34px; }}
+  .bar {{ flex:1; height:5px; border-radius:3px; background:var(--line); overflow:hidden; }}
+  .bar i {{ display:block; height:100%; border-radius:3px; }}
+  .metric b {{ width:38px; text-align:right; color:var(--text); font-variant-numeric:tabular-nums; }}
+  .metric b.hot {{ color:#ef4444; }}
+  h2 {{ font-size:14px; color:var(--mute); font-weight:600; margin:24px 0 10px; }}
+  ul {{ list-style:none; margin:0; padding:0; background:var(--panel); border:1px solid var(--line);
+       border-radius:12px; overflow:hidden; }}
+  li {{ display:flex; align-items:center; gap:10px; padding:9px 14px; font-size:13px;
+       border-top:1px solid var(--line); }}
+  li:first-child {{ border-top:0; }}
+  li.none {{ color:var(--mute); }}
+  .dot {{ width:8px; height:8px; border-radius:50%; flex-shrink:0; }}
+  li em {{ margin-left:auto; font-style:normal; color:var(--mute); font-size:11.5px; }}
+  footer {{ margin-top:26px; color:var(--mute); font-size:11.5px; text-align:center; line-height:1.8; }}
+</style></head><body><div class="page">
+  <div class="head"><h1>Hermes Watch</h1><span class="verdict">{overall}</span>
+    <span style="color:{color};font-weight:600">{verdict}</span></div>
+  <div class="meta">Fleet 平均健康分 · {len(hosts)} 台主机 · 每分钟自动刷新 · 生成于 {gen_str}</div>
+  {''.join(cards)}
+  <h2>待处理发现</h2>
+  <ul>{finding_rows}</ul>
+  <footer>本页由 Hermes Watch 本地规则引擎生成 · 只读状态页，不含主机地址与巡检证据<br>
+  完整诊断与运维能力请访问面板（需授权）</footer>
+</div></body></html>"""

@@ -1,21 +1,34 @@
 """FastAPI application: REST + SSE stream + WebSocket terminal + MCP. Run: python run.py"""
 import asyncio
 import json
+import math
 import pathlib
 import re
 import time
+from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
-from . import agent, analysis, auth, db, executor, mcp_server, reports, rules, scheduler, seed, secrets, terminal
+from . import agent, analysis, auth, db, executor, mcp_server, notify, reports, rules, scheduler, seed, secrets, terminal
 
-app = FastAPI(title="Hermes Watch", version="0.2.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"],
-                   allow_methods=["*"], allow_headers=["*"], allow_credentials=True)
+# 前端经 vite 代理（生产同源部署）访问 /api，浏览器永远同源 —— 不开 CORS 面
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    db.init_db()
+    scheduler.set_broadcaster(broadcast)
+    if seed.seed_if_empty():
+        print("[seed] demo fleet created: web-1 / db-1 / app-1 / cache-1")
+    asyncio.create_task(scheduler.collect_all())  # 首轮巡检后台跑：端口先监听，SSH 慢主机不阻塞启动
+    asyncio.create_task(scheduler.loop())
+    yield
+
+
+app = FastAPI(title="Hermes Watch", version="0.2.0", lifespan=lifespan)
 
 # 无需面板会话的路径：登录流程自身、出站 Agent（token 自鉴权）、本地 MCP（只读、仅本机）
 AUTH_OPEN = ("/api/auth/status", "/api/auth/login",
@@ -38,16 +51,6 @@ async def broadcast(kind: str, message: str, data: dict | None = None):
     evt = {"ts": db.now(), "kind": kind, "message": message, "data": data or {}}
     for q in list(_subs):
         await q.put(json.dumps(evt, ensure_ascii=False))
-
-
-@app.on_event("startup")
-async def startup():
-    db.init_db()
-    scheduler.set_broadcaster(broadcast)
-    if seed.seed_if_empty():
-        print("[seed] demo fleet created: web-1 / db-1 / app-1 / cache-1")
-    await scheduler.collect_all()  # immediate first snapshot
-    asyncio.create_task(scheduler.loop())
 
 
 @app.get("/api/stream")
@@ -120,8 +123,12 @@ async def add_host(h: HostIn):
 
 @app.delete("/api/hosts/{hid}")
 async def del_host(hid: int):
+    if not db.query_one("SELECT id FROM hosts WHERE id=?", (hid,)):
+        raise HTTPException(404, "主机不存在")
+    for table in ("metrics", "findings", "proposals", "events", "proposal_runs"):
+        db.execute(f"DELETE FROM {table} WHERE host_id=?", (hid,))
     db.execute("DELETE FROM hosts WHERE id=?", (hid,))
-    db.execute("DELETE FROM metrics WHERE host_id=?", (hid,))
+    await broadcast("host", f"已删除主机 #{hid} 及其全部巡检数据")
     return {"ok": True}
 
 
@@ -172,7 +179,8 @@ async def analyze(fid: int):
     card = await analysis.analyze_finding(h, f)
     await broadcast("analysis", f"agent 完成诊断: {f['title']}", {"finding_id": fid})
     if f["severity"] == "crit":
-        await notify("诊断完成", f"{h['name']}: {f['title']} → {card.get('root_cause', '')[:80]}")
+        asyncio.ensure_future(notify.send("诊断完成",
+                                          f"{h['name']}: {f['title']} → {card.get('root_cause', '')[:80]}"))
     return card
 
 
@@ -227,7 +235,8 @@ async def execute_proposal(pid: int):
                     f"（{run['status']}）: {p['title']}", {"proposal_id": pid, "run_id": run["id"]})
     if run["status"] == "ok" and p["finding_id"]:
         # 执行成功 → 发现真正解决
-        db.execute("UPDATE findings SET status='resolved' WHERE id=?", (p["finding_id"],))
+        db.execute("UPDATE findings SET status='resolved', resolved_at=? WHERE id=?",
+                   (db.now(), p["finding_id"]))
     elif run["status"] != "ok" and p["finding_id"]:
         # 执行失败/超时 → 发现保持 analyzed，回到待处理
         db.execute("UPDATE findings SET status='analyzed' WHERE id=? AND status='resolved'",
@@ -301,6 +310,29 @@ async def set_settings(payload: dict):
     return {"ok": True}
 
 
+# ---------- notification channels ----------
+
+@app.get("/api/notify/channels")
+def notify_channels():
+    return {"labels": notify.LABELS, "configured": notify.configured(),
+            **notify.conf()}
+
+
+@app.post("/api/notify/test")
+async def notify_test():
+    ok, err = await notify.send("测试", "这是一条 Hermes Watch 测试通知，收到即代表渠道配置生效")
+    if not ok:
+        raise HTTPException(400, err or "发送失败")
+    await broadcast("settings", "通知渠道测试通过")
+    return {"ok": True}
+
+
+@app.get("/api/notify/log")
+def notify_log(limit: int = 30):
+    rows = db.query("SELECT * FROM notify_log ORDER BY ts DESC LIMIT ?", (limit,))
+    return rows
+
+
 # ---------- AI chat ----------
 
 class ChatIn(BaseModel):
@@ -311,6 +343,16 @@ class ChatIn(BaseModel):
 @app.post("/api/chat")
 async def chat(c: ChatIn):
     return await analysis.chat_answer(c.question.strip()[:500], c.history)
+
+
+@app.post("/api/chat/stream")
+async def chat_stream(c: ChatIn):
+    """SSE 流式对话：逐 token 推送，LLM 关闭时推本地规则引擎摘要。"""
+    async def gen():
+        async for chunk in analysis.chat_stream(c.question.strip()[:500], c.history):
+            yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 # ---------- LLM 端点工具：获取模型列表 + 测活（ccswitch 式） ----------
@@ -454,6 +496,7 @@ async def auth_enable(p: PasswordIn):
     if len(p.password) < 4:
         raise HTTPException(400, "口令至少 4 位")
     auth.set_password(p.password)
+    auth.bump_session_epoch()  # 重新启用 = 全部旧会话作废，需用新口令登录
     db.execute("INSERT INTO settings(key,value) VALUES('panel_auth','on') "
                "ON CONFLICT(key) DO UPDATE SET value='on'")
     await broadcast("settings", "面板访问控制已开启")
@@ -467,6 +510,7 @@ async def auth_disable(p: PasswordIn, request: Request):
     if not auth.verify_password(p.password):
         raise HTTPException(401, "口令错误")
     db.execute("UPDATE settings SET value='off' WHERE key='panel_auth'")
+    auth.bump_session_epoch()
     await broadcast("settings", "面板访问控制已关闭")
     return {"ok": True}
 
@@ -480,23 +524,12 @@ async def auth_change(c: ChangePwIn):
     if len(c.new) < 4:
         raise HTTPException(400, "新口令至少 4 位")
     auth.set_password(c.new)
+    auth.bump_session_epoch()  # 换口令后所有旧会话（含当前浏览器）失效，需重新登录
     await broadcast("settings", "面板口令已更换")
     return {"ok": True}
 
 
-# ---------- webhook notifications ----------
-
-async def notify(kind: str, text: str):
-    url_row = db.query_one("SELECT value FROM settings WHERE key='webhook_url'")
-    url = (url_row or {}).get("value") or ""
-    if not url.startswith("http"):
-        return
-    body = {"msgtype": "text", "text": {"content": f"[Hermes Watch] {kind}: {text}"}}
-    try:
-        async with httpx.AsyncClient(timeout=8) as cli:
-            await cli.post(url, json=body)
-    except Exception:
-        pass
+# ---------- webhook notifications（多渠道实现见 notify.py）----------
 
 
 # ---------- web terminal (WebSocket) ----------
@@ -589,26 +622,55 @@ async def agent_push_body(request: Request):
     if sig:  # 签名通道：验签 + 时间戳防重放
         if not agent.verify_signature(token, raw, request.headers.get("x-hw-timestamp", ""), sig):
             raise HTTPException(401, "签名无效或时间戳过期")
-    m = {k: float(data.get(k, 0) or 0) for k in
-         ("cpu", "mem", "disk", "load1", "net_in", "net_out")}
+    # NaN/inf 防御：一个坏点就能让阈值判断全部失效并污染图表
+    def _num(k: str) -> float:
+        v = float(data.get(k, 0) or 0)
+        return v if math.isfinite(v) else 0.0
+    m = {k: _num(k) for k in ("cpu", "mem", "disk", "load1", "net_in", "net_out")}
     db.execute(
         "INSERT INTO metrics(host_id,ts,cpu,mem,disk,net_in,net_out,load1) VALUES(?,?,?,?,?,?,?,?)",
         (h["id"], db.now(), m["cpu"], m["mem"], m["disk"], m["net_in"], m["net_out"], m["load1"]))
+    db.execute("UPDATE hosts SET last_ok_ts=?, last_error='' WHERE id=?", (db.now(), h["id"]))
     extras = data.get("extra") or {}
     if extras:
         db.execute("UPDATE hosts SET last_extras=? WHERE id=?", (db.j(extras), h["id"]))
-    prev_open = {f["type"] for f in db.query(
-        "SELECT type FROM findings WHERE host_id=? AND status IN ('open','analyzed')", (h["id"],))}
-    for f in rules.evaluate(h, m, extras):
-        if f["type"] in prev_open:
-            continue
-        fid = db.execute(
-            "INSERT INTO findings(host_id,ts,type,severity,title,detail,evidence) VALUES(?,?,?,?,?,?,?)",
-            (f["host_id"], f["ts"], f["type"], f["severity"], f["title"], f["detail"], db.j(f["evidence"])))
-        await broadcast("finding", f"[{f['severity'].upper()}] {f['title']}", {"finding_id": fid})
-        await notify("发现告警", f"{h['name']}: {f['title']}")
+    await scheduler.process_findings(h, m, extras)
     await broadcast("host", f"{h['name']} agent 指标已上报", {"host_id": h["id"]})
     return {"ok": True}
+
+
+# ---------- public status page (token-gated, read-only) ----------
+
+@app.get("/api/status/token")
+def status_token_info():
+    tok = (db.query_one("SELECT value FROM settings WHERE key='status_token'") or {}).get("value") or ""
+    return {"enabled": bool(tok), "token": tok}
+
+
+@app.post("/api/status/token")
+async def status_token_gen():
+    tok = agent.new_token()  # hw_ 前缀随机 token，复用出站 agent 的生成器
+    db.execute("INSERT INTO settings(key,value) VALUES('status_token',?) "
+               "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (tok,))
+    await broadcast("settings", "公开状态页已开启（新分享链接）")
+    return {"enabled": True, "token": tok}
+
+
+@app.delete("/api/status/token")
+async def status_token_revoke():
+    db.execute("DELETE FROM settings WHERE key='status_token'")
+    await broadcast("settings", "公开状态页已关闭（链接立即失效）")
+    return {"enabled": False}
+
+
+@app.get("/status/{token}", response_class=HTMLResponse)
+def public_status(token: str):
+    """带 token 的只读状态页：任何拿到链接的人可看健康概览，看不到凭据/终端/证据链。
+    不在 /api 下，天然绕过面板会话门；token 撤销即失效。"""
+    expected = (db.query_one("SELECT value FROM settings WHERE key='status_token'") or {}).get("value") or ""
+    if not expected or token != expected:
+        raise HTTPException(404, "状态页不存在或已关闭")
+    return reports.render_status_page(analysis.fleet_snapshot())
 
 
 # ---------- local MCP server (streamable HTTP, read-only) ----------

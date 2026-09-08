@@ -43,6 +43,20 @@ class MockLLM(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(n)) if n else {}
         prompt = body.get("messages", [{}])[0].get("content", "")
         content = REPLIES[_pick(prompt)]
+        if body.get("stream"):
+            # OpenAI 流式协议：若干 delta 帧后跟 [DONE]，配合面板流式对话联调
+            # HTTP/1.0 无 Content-Length → 连接关闭即帧结束，必须显式 close_connection
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.close_connection = True
+            for i in range(0, len(content), 12):
+                frame = json.dumps({"choices": [{"delta": {"content": content[i:i + 12]}}]},
+                                   ensure_ascii=False)
+                self.wfile.write(f"data: {frame}\n\n".encode())
+            self.wfile.write(b"data: [DONE]\n\n")
+            return
         out = json.dumps({"choices": [{"message": {"content": content}}]}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")

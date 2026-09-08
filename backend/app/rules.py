@@ -14,6 +14,12 @@ DEFAULT_THRESHOLDS = {
     "cert_days": 14,
 }
 
+# 滞后恢复阈值（Netdata CLEAR 模式）：触发用 warn/crit 阈值，恢复要求指标回落到
+# 更低的 clear 阈值之下——防止指标在告警线附近抖动导致告警反复打翻（flapping）。
+CLEAR_THRESHOLDS = {
+    "disk": 80, "memory": 80, "cpu": 75, "load": 6.0,
+}
+
 _INT_KEYS = set(DEFAULT_THRESHOLDS)
 
 
@@ -34,12 +40,23 @@ SEV_ORDER = {"info": 0, "warn": 1, "crit": 2}
 DEDUCTIONS = {"warn": 8, "crit": 25}
 
 
+def clear_thresholds() -> dict:
+    """恢复阈值 = min(用户同主阈值 - 5, 内置 clear 值)，用户调高告警线时恢复线跟随。"""
+    t = dict(CLEAR_THRESHOLDS)
+    T = thresholds()
+    for k_main, k_clear in (("disk_warn", "disk"), ("mem_warn", "memory"),
+                            ("cpu_warn", "cpu"), ("load_warn", "load")):
+        t[k_clear] = min(t[k_clear], T[k_main] - 5)
+    return t
+
+
 def evaluate(host: dict, latest: dict | None, extras: dict) -> list[dict]:
     """Return list of finding dicts (not persisted). extras: top_proc/failed_services/logins/cert."""
     f: list[dict] = []
     if not latest:
         return f
     T = thresholds()
+    C = clear_thresholds()
     hid, now = host["id"], db.now()
 
     def add(type_, sev, title, detail, evidence=None):
@@ -47,17 +64,26 @@ def evaluate(host: dict, latest: dict | None, extras: dict) -> list[dict]:
                   "title": title, "detail": detail, "evidence": evidence or {}})
 
     disk, mem, cpu, load = latest["disk"], latest["mem"], latest["cpu"], latest["load1"]
-    if disk >= T["disk_crit"]:
-        add("disk", "crit", f"磁盘使用率 {disk:.0f}%", "磁盘即将写满，有写入失败风险", {"disk": disk})
+    # 滞后：告警已处于打开状态（open/analyzed）时，指标须回落到 clear 阈值之下才算解除
+    active = {r["type"] for r in db.query(
+        "SELECT DISTINCT type FROM findings WHERE host_id=? AND status IN ('open','analyzed')", (hid,))}
+    if disk >= T["disk_crit"] or ("disk" in active and disk >= C["disk"]):
+        add("disk", "crit" if disk >= T["disk_crit"] else "warn",
+            f"磁盘使用率 {disk:.0f}%",
+            "磁盘即将写满，有写入失败风险" if disk >= T["disk_crit"] else f"超过 {T['disk_warn']:.0f}% 警戒线",
+            {"disk": disk})
     elif disk >= T["disk_warn"]:
         add("disk", "warn", f"磁盘使用率 {disk:.0f}%", f"超过 {T['disk_warn']:.0f}% 警戒线", {"disk": disk})
-    if mem >= T["mem_crit"]:
-        add("memory", "crit", f"内存使用率 {mem:.0f}%", "内存逼近 OOM 边界", {"mem": mem})
+    if mem >= T["mem_crit"] or ("memory" in active and mem >= C["memory"]):
+        add("memory", "crit" if mem >= T["mem_crit"] else "warn",
+            f"内存使用率 {mem:.0f}%",
+            "内存逼近 OOM 边界" if mem >= T["mem_crit"] else f"超过 {T['mem_warn']:.0f}% 警戒线",
+            {"mem": mem})
     elif mem >= T["mem_warn"]:
         add("memory", "warn", f"内存使用率 {mem:.0f}%", f"超过 {T['mem_warn']:.0f}% 警戒线", {"mem": mem})
-    if cpu >= T["cpu_warn"]:
+    if cpu >= T["cpu_warn"] or ("cpu" in active and cpu >= C["cpu"]):
         add("cpu", "warn", f"CPU 使用率 {cpu:.0f}%", "持续高负载", {"cpu": cpu})
-    if load >= T["load_warn"]:
+    if load >= T["load_warn"] or ("load" in active and load >= C["load"]):
         add("load", "warn", f"系统负载 {load:.1f}", f"load1 超过 {T['load_warn']:.0f}", {"load1": load})
 
     for svc in extras.get("failed_services", []):

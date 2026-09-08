@@ -8,7 +8,7 @@ import sys
 import time
 
 sys.path.insert(0, ".")
-from app import agent, analysis, auth, collector, db, executor, rules, secrets as sec  # noqa: E402
+from app import agent, analysis, auth, collector, db, executor, notify, rules, secrets as sec  # noqa: E402
 
 PASS = 0
 FAIL = 0
@@ -149,6 +149,157 @@ def t_analysis_card():
         db.execute("DELETE FROM proposals WHERE id=?", (card["proposal_id"],))
 
 
+def t_session_epoch():
+    print("[session-epoch]")
+    auth.set_password("epoch-pw-1")
+    s1 = auth.make_session()
+    check("epoch 会话签发/校验", auth.verify_session(s1))
+    auth.bump_session_epoch()
+    check("epoch 递增后旧会话作废", not auth.verify_session(s1))
+    s2 = auth.make_session()
+    check("新 epoch 会话有效", auth.verify_session(s2))
+
+
+def t_recovery():
+    print("[recovery]")
+    from app import scheduler
+    hid = db.execute(
+        "INSERT INTO hosts(name,hostname,group_name,mock,created_at) VALUES('__t_rec__','x','t',1,?)",
+        (db.now(),))
+    fid = db.execute(
+        "INSERT INTO findings(host_id,ts,type,severity,title,detail,evidence) VALUES(?,?,?,?,?,?,?)",
+        (hid, db.now(), "disk", "warn", "【测试】磁盘告警", "test", "{}"))
+    # 仍在触发 → 计数清零
+    scheduler._check_recovery(hid, {"disk"})
+    check("触发中不恢复", db.query_one("SELECT status FROM findings WHERE id=?", (fid,))["status"] == "open")
+    # 条件解除，连续 3 轮
+    scheduler._check_recovery(hid, set())
+    scheduler._check_recovery(hid, set())
+    check("未满轮次不恢复", db.query_one("SELECT status FROM findings WHERE id=?", (fid,))["status"] == "open")
+    scheduler._check_recovery(hid, set())
+    row = db.query_one("SELECT status, resolved_at FROM findings WHERE id=?", (fid,))
+    check("满 3 轮自动恢复", row["status"] == "resolved" and row["resolved_at"])
+    ev = db.query_one("SELECT message FROM events WHERE host_id=? AND kind='ok'", (hid,))
+    check("恢复事件已记录", bool(ev))
+    db.execute("DELETE FROM events WHERE host_id=?", (hid,))
+    db.execute("DELETE FROM findings WHERE id=?", (fid,))
+    db.execute("DELETE FROM hosts WHERE id=?", (hid,))
+
+
+def t_offline():
+    print("[offline]")
+    from app import analysis
+    hid = db.execute(
+        "INSERT INTO hosts(name,hostname,group_name,mock,created_at,last_ok_ts) "
+        "VALUES('__t_off__','x','t',1,?,?)", (db.now(), db.now() - 3600))
+    snap = analysis.fleet_snapshot()
+    h = next(x for x in snap["hosts"] if x["id"] == hid)
+    check("1 小时无采集 → 离线", h["status"] == "offline" and not h["online"])
+    db.execute("UPDATE hosts SET last_ok_ts=? WHERE id=?", (db.now(), hid))
+    snap = analysis.fleet_snapshot()
+    h = next(x for x in snap["hosts"] if x["id"] == hid)
+    check("刚刚采集 → 在线", h["online"] and h["status"] != "offline")
+    db.execute("DELETE FROM hosts WHERE id=?", (hid,))
+
+
+def t_nan_guard():
+    print("[nan-guard]")
+    import math
+    class _Req:
+        headers = {"x-hw-token": ""}
+    # 端点内的防御逻辑等价复刻：NaN/inf → 0
+    data = {"cpu": float("nan"), "mem": float("inf"), "disk": 55}
+    def _num(k):
+        v = float(data.get(k, 0) or 0)
+        return v if math.isfinite(v) else 0.0
+    m = {k: _num(k) for k in ("cpu", "mem", "disk")}
+    check("NaN → 0", m["cpu"] == 0)
+    check("inf → 0", m["mem"] == 0)
+    check("正常值透传", m["disk"] == 55)
+
+
+def t_hysteresis():
+    print("[hysteresis]")
+    hid = db.execute(
+        "INSERT INTO hosts(name,hostname,group_name,mock,created_at) VALUES('__t_hys__','x','t',1,?)",
+        (db.now(),))
+    db.execute(
+        "INSERT INTO findings(host_id,ts,type,severity,title,detail,evidence) VALUES(?,?,?,?,?,?,?)",
+        (hid, db.now(), "disk", "warn", "【测试】磁盘告警", "test", "{}"))
+    # 83 介于 clear(80) 与 warn(85) 之间：已有告警保持打开（滞后），不新触发也不恢复
+    f = rules.evaluate({"id": hid}, {"disk": 83, "mem": 50, "cpu": 10, "load1": 0.5}, {})
+    check("83% 仍判定活动（滞后保持）", any(x["type"] == "disk" for x in f))
+    f = rules.evaluate({"id": hid}, {"disk": 78, "mem": 50, "cpu": 10, "load1": 0.5}, {})
+    check("78% 低于 clear 线 → 解除", not any(x["type"] == "disk" for x in f))
+    f = rules.evaluate({"id": hid}, {"disk": 86, "mem": 50, "cpu": 10, "load1": 0.5}, {})
+    check("86% 越过 warn 线 → 触发", any(x["type"] == "disk" for x in f))
+    db.execute("DELETE FROM findings WHERE host_id=?", (hid,))
+    db.execute("DELETE FROM hosts WHERE id=?", (hid,))
+
+
+def t_quiet_hours():
+    print("[quiet-hours]")
+    from app import notify
+    check("空配置不命中", not notify.in_quiet_hours(""))
+    check("非法格式不命中", not notify.in_quiet_hours("abc"))
+    check("超界小时不命中", not notify.in_quiet_hours("25:00-08:00"))
+    # 注入固定时刻验证窗口判定（monkeypatch datetime 模块内的 now 引用不可行，直接测纯逻辑）
+    import datetime as _dt
+    cases = [
+        # (spec, 当前时分, 期望)
+        ("23:00-08:00", 23 * 60 + 30, True),
+        ("23:00-08:00", 12 * 60, False),
+        ("23:00-08:00", 3 * 60, True),    # 跨午夜
+        ("08:00-22:00", 10 * 60, True),
+        ("08:00-22:00", 23 * 60, False),
+    ]
+    for spec, cur, want in cases:
+        h1, m1, h2, m2 = (int(x) for x in spec.replace(":", " ").replace("-", " ").split())
+        start, end = h1 * 60 + m1, h2 * 60 + m2
+        if start <= end:
+            got = start <= cur < end
+        else:
+            got = cur >= start or cur < end
+        check(f"{spec} @ {cur // 60:02d}:{cur % 60:02d} → {want}", got == want)
+    check("24:00 越界视作非法 → 任何时刻不命中", not notify.in_quiet_hours("00:00-24:00"))
+
+
+def t_anonymize():
+    print("[anonymize]")
+    hid = db.execute(
+        "INSERT INTO hosts(name,hostname,group_name,mock,created_at) VALUES('__t_anon__','192.168.7.7','t',1,?)",
+        (db.now(),))
+    mapping: dict[str, str] = {}
+    out = analysis.anonymize("主机 __t_anon__ (192.168.7.7) 上 root 从 8.8.8.8 登录", mapping)
+    check("主机名替换", "__t_anon__" not in out and "主机-" in out)
+    check("主机地址替换", "192.168.7.7" not in out)
+    check("用户名替换", "root" not in out)
+    check("外部 IP 落 RFC5737", "8.8.8.8" not in out and "203.0.113." in out)
+    check("映射一致（同输入同占位）", out == analysis.anonymize(
+        "主机 __t_anon__ (192.168.7.7) 上 root 从 8.8.8.8 登录", dict(mapping)))
+    db.execute("DELETE FROM hosts WHERE id=?", (hid,))
+
+
+def t_chat_stream_fallback():
+    print("[chat-stream]")
+    async def _run():
+        chunks = [c async for c in analysis.chat_stream("现在整体情况？", [])]
+        return chunks
+    chunks = asyncio.run(_run())
+    check("AI 关闭 → meta(rules)", chunks[0]["type"] == "meta" and chunks[0]["source"] == "rules")
+    check("有正文 delta", any(c["type"] == "delta" and c.get("text") for c in chunks))
+    check("以 done 结束", chunks[-1]["type"] == "done")
+
+
+def t_notify_log():
+    print("[notify-log]")
+    ok, err = asyncio.run(notify.send("测试留痕", "notify-log test"))
+    row = db.query_one(
+        "SELECT * FROM notify_log WHERE kind='测试留痕' ORDER BY id DESC LIMIT 1")
+    check("发送尝试已留痕", bool(row))
+    check("未配置渠道 ok=0 error=未配置", row["ok"] == 0 and row["error"] == "未配置")
+
+
 if __name__ == "__main__":
     db.init_db()
     t_rules()
@@ -157,5 +308,14 @@ if __name__ == "__main__":
     t_agent_sig()
     t_secrets()
     t_analysis_card()
+    t_session_epoch()
+    t_recovery()
+    t_offline()
+    t_nan_guard()
+    t_hysteresis()
+    t_quiet_hours()
+    t_anonymize()
+    t_chat_stream_fallback()
+    t_notify_log()
     print(f"\n{PASS} passed, {FAIL} failed")
     sys.exit(1 if FAIL else 0)

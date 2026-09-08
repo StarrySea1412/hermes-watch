@@ -114,7 +114,7 @@ async def _real_exec(host: dict, command: str) -> tuple[str, int]:
     conn = await asyncio.wait_for(
         asyncssh.connect(host["hostname"], port=host["port"] or 22,
                          username=host["username"] or "root",
-                         client_keys=None if secret else [],
+                         client_keys=secrets.default_client_keys() or None,  # 密码留空 = 本机默认密钥（与采集一致）
                          password=secret or None, known_hosts=None),
         timeout=10)
     try:

@@ -266,6 +266,10 @@ html.light { --accent-strong-hover: rgba(8, 145, 178, 0.16); }
 .typing-dot:nth-child(3) { animation-delay: .3s; }
 @keyframes typing { 0%, 60%, 100% { transform: translateY(0); opacity: .35; } 30% { transform: translateY(-4px); opacity: 1; } }
 
+/* 流式输出光标 */
+.stream-cursor { display: inline-block; color: var(--accent); animation: cursor-blink 1s steps(1) infinite; margin-left: 1px; }
+@keyframes cursor-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
 /* 弹窗缩放入场 */
 .pop-in { animation: pop .22s cubic-bezier(.2,.7,.3,1); }
 @keyframes pop { from { opacity: 0; transform: scale(.94) translateY(8px); } to { opacity: 1; transform: none; } }

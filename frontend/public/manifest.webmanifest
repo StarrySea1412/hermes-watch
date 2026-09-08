@@ -1,0 +1,14 @@
+{
+  "name": "Hermes Watch · AI 服务器巡检",
+  "short_name": "Hermes Watch",
+  "description": "AI 服务器巡检与可视化平台：自动巡检、根因诊断、健康报告，全程数据本地",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0a0f1c",
+  "theme_color": "#0a0f1c",
+  "lang": "zh-CN",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

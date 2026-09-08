@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { api, fmtNet, fmtTime, SEV, type Finding } from '../api'
 import { PageHead } from '../ui'
@@ -33,6 +33,27 @@ export default function HostDetail() {
   }, [id, range])
 
   const reload = () => { setErr(''); api<Detail>(`/hosts/${id}?range_min=${range}`).then(setD).catch(e => setErr(e.message)) }
+
+  // 巡检心跳：把时间窗切成 48 桶，每桶取桶内最差状态（UK ping chart 式的上下条带）
+  // 注意：hook 必须在下面所有提前 return 之前调用，否则 d 加载完成后 hooks 数量变化会崩
+  const emptyMetrics: Detail['metrics'] = []
+  const heartbeat = useMemo(() => {
+    const now = Date.now() / 1000
+    const span = range * 60
+    const start = now - span
+    const bw = span / 48
+    const buckets = Array.from({ length: 48 }, (_, i) => ({ state: 'none' as 'ok' | 'warn' | 'crit' | 'none', from: start + i * bw }))
+    for (const m of d?.metrics ?? emptyMetrics) {
+      const idx = Math.min(47, Math.max(0, Math.floor((m.ts - start) / bw)))
+      const st: 'ok' | 'warn' | 'crit' = (m.disk >= 95 || m.mem >= 92) ? 'crit'
+        : (m.disk >= 85 || m.mem >= 85 || m.cpu >= 85) ? 'warn' : 'ok'
+      const b = buckets[idx]
+      if (st === 'crit' || (st === 'warn' && b.state !== 'crit') || (st === 'ok' && b.state === 'none')) b.state = st
+    }
+    return buckets
+  }, [d, range])
+  const HB_COLOR = { ok: 'var(--ok)', warn: 'var(--warn)', crit: 'var(--crit)', none: 'var(--border)' } as const
+  const HB_LABEL = { ok: '正常', warn: '警告', crit: '严重', none: '无数据' } as const
 
   if (err && !d) return (
     <div className="fade-in">
@@ -82,13 +103,31 @@ export default function HostDetail() {
             </div>
           </div>
         </div>
-        <div className="card p-3 flex-1">
-          <LineChart data={chartData} marks={marks} height={230} series={[
-            { name: 'CPU', key: 1, color: P['--m-cpu'] },
-            { name: '内存', key: 2, color: P['--m-mem'] },
-            { name: '磁盘', key: 3, color: P['--m-disk'] },
-          ]} />
+      <div className="card p-3 flex-1">
+        <LineChart data={chartData} marks={marks} height={230} series={[
+          { name: 'CPU', key: 1, color: P['--m-cpu'] },
+          { name: '内存', key: 2, color: P['--m-mem'] },
+          { name: '磁盘', key: 3, color: P['--m-disk'] },
+        ]} />
+        <div className="mt-2.5 px-1">
+          <div className="flex items-center gap-2 mb-1.5">
+            <span className="text-[11px] text-[var(--text-faint)]">巡检心跳</span>
+            <div className="flex items-center gap-2.5 ml-auto text-[10px] text-[var(--text-faint)]">
+              {(['ok', 'warn', 'crit'] as const).map(k => (
+                <span key={k} className="flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-sm" style={{ background: HB_COLOR[k] }} />{HB_LABEL[k]}
+                </span>
+              ))}
+            </div>
+          </div>
+          <div className="flex gap-[2px] h-4">
+            {heartbeat.map((b, i) => (
+              <div key={i} className="flex-1 rounded-[2px] transition-colors" title={`${fmtTime(b.from)} · ${HB_LABEL[b.state]}`}
+                style={{ background: HB_COLOR[b.state], opacity: b.state === 'none' ? 0.5 : 0.9 }} />
+            ))}
+          </div>
         </div>
+      </div>
       </div>
 
       {d.findings.length > 0 && (

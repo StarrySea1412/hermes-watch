@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, subscribe, type Host } from '../api'
+import { api, fmtTime, subscribe, type Host } from '../api'
 import { PageHead } from '../ui'
 
 const THRESHOLD_FIELDS: { key: string; label: string; hint: string }[] = [
@@ -14,14 +14,17 @@ const THRESHOLD_FIELDS: { key: string; label: string; hint: string }[] = [
 
 const THRESH_KEYS = THRESHOLD_FIELDS.map(f => f.key)
 
+const NOTIFY_LABELS: Record<string, string> = {
+  wecom: '企业微信', dingtalk: '钉钉', feishu: '飞书',
+  telegram: 'Telegram', serverchan: 'Server酱', webhook: '通用 Webhook',
+}
+
 export default function Settings() {
   const [hosts, setHosts] = useState<Host[]>([])
   const [settings, setSettings] = useState<Record<string, string>>({})
   const [form, setForm] = useState({ name: '', hostname: '', username: 'root', secret: '', group_name: 'default' })
   const [msg, setMsg] = useState('')
   const [provider, setProvider] = useState<any>({})
-  const [webhook, setWebhook] = useState('')
-  const [webhookSaved, setWebhookSaved] = useState('')
   const [th, setTh] = useState<Record<string, string>>({})
   const [thSaved, setThSaved] = useState(false)
   const [authPw, setAuthPw] = useState('')
@@ -32,18 +35,34 @@ export default function Settings() {
   const [modelsMsg, setModelsMsg] = useState('')
   const [testing, setTesting] = useState(false)
   const [testRes, setTestRes] = useState<any>(null)
+  const [notifyChannel, setNotifyChannel] = useState('wecom')
+  const [notifyUrl, setNotifyUrl] = useState('')
+  const [notifyChatId, setNotifyChatId] = useState('')
+  const [notifyQuiet, setNotifyQuiet] = useState('')
+  const [notifyResend, setNotifyResend] = useState('0')
+  const [notifyMsg, setNotifyMsg] = useState('')
+  const [testingNotify, setTestingNotify] = useState(false)
+  const [notifyLog, setNotifyLog] = useState<any[]>([])
+  const [statusTok, setStatusTok] = useState('')
+  const notifyLabels = NOTIFY_LABELS
 
   const load = () => Promise.all([
     api<{ hosts: Host[] }>('/fleet').then(d => setHosts(d.hosts)),
     api<Record<string, string>>('/settings').then(s => {
       setSettings(s)
       try { setProvider(JSON.parse(s.ai_provider || '{}')) } catch { /* ignore */ }
-      setWebhookSaved(s.webhook_url || '')
-      setWebhook(s.webhook_url || '')
+      setNotifyChannel(s.notify_channel && NOTIFY_LABELS[s.notify_channel] ? s.notify_channel : 'wecom')
+      setNotifyUrl(s.webhook_url || '')
+      setNotifyChatId(s.telegram_chat_id || '')
+      setNotifyQuiet(s.quiet_hours || '')
+      setNotifyResend(s.notify_resend_min ?? '0')
       const t: Record<string, string> = {}
       for (const k of THRESH_KEYS) t[k] = s[k] ?? ''
       setTh(t)
     }),
+    api<any[]>('/notify/log?limit=8').then(setNotifyLog).catch(() => { /* 留痕失败不打断 */ }),
+    api<{ enabled: boolean; token: string }>('/status/token')
+      .then(r => setStatusTok(r.token || '')).catch(() => { /* noop */ }),
   ])
   useEffect(() => { load(); return subscribe(() => load()) }, [])
 
@@ -117,12 +136,16 @@ export default function Settings() {
               </div>
             ))}
           </div>
-          <div className="flex items-center gap-3 mt-3.5">
+          <div className="flex items-center gap-2.5 mt-3.5">
             <button className="btn btn-primary" onClick={saveThresholds}>{thSaved ? '✓ 已保存' : '保存阈值'}</button>
             <span className="text-[11px] text-[var(--text-faint)]">巡检周期 <input className="input num inline-block text-center"
               style={{ width: 64, padding: '4px 6px' }} value={settings.poll_seconds ?? '60'}
               onChange={e => setSettings({ ...settings, poll_seconds: e.target.value })}
               onBlur={() => saveSetting('poll_seconds', settings.poll_seconds ?? '60')} /> 秒</span>
+            <span className="text-[11px] text-[var(--text-faint)]">事件保留 <input className="input num inline-block text-center"
+              style={{ width: 56, padding: '4px 6px' }} value={settings.events_retention_days ?? '30'}
+              onChange={e => setSettings({ ...settings, events_retention_days: e.target.value })}
+              onBlur={() => saveSetting('events_retention_days', settings.events_retention_days ?? '30')} /> 天</span>
           </div>
         </div>
 
@@ -271,6 +294,12 @@ export default function Settings() {
           <button className="btn" disabled={testing || !provider.base_url} onClick={testLlm}>
             {testing ? '测试中…' : '⚡ 连通测活'}
           </button>
+          <button className="btn" style={settings.ai_anonymize === 'on'
+            ? { background: 'var(--ok-bg)', color: 'var(--ok)', borderColor: 'var(--ok-border)' }
+            : undefined}
+            onClick={() => saveSetting('ai_anonymize', settings.ai_anonymize === 'on' ? 'off' : 'on')}>
+            {settings.ai_anonymize === 'on' ? '● 出站脱敏开' : '○ 出站脱敏关'}
+          </button>
           {models.length > 0 && (
             <select className="input mono" style={{ width: 'auto', padding: '6px 10px' }} value=""
               onChange={e => { if (e.target.value) saveProvider({ model: e.target.value }) }}>
@@ -290,21 +319,124 @@ export default function Settings() {
         )}
         <p className="text-[11px] text-[var(--text-faint)] mt-3 leading-relaxed">
           测活与诊断叙事走同一条 chat/completions 路径，通过即代表 AI 叙事可用。
-          本地试运行：py backend/mock_llm.py → Base URL 填 http://127.0.0.1:18777/v1
+          出站脱敏开启时，主机名 / IP / 用户名在发给 LLM 前替换为占位符（k8sgpt 式 anonymize），
+          映射只在内存中、不落盘，回答再映射回真实名。本地试运行：py backend/mock_llm.py → Base URL 填 http://127.0.0.1:18777/v1
         </p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">
         <div className="card p-5">
-          <h3 className="font-semibold text-[14.5px] text-[var(--text-hi)] mb-1.5">通知 Webhook</h3>
-          <p className="text-[12px] text-[var(--text-faint)] mb-3">产生 crit 发现或报告生成时 POST JSON（企业微信/钉钉/Telegram bot 网关均可）</p>
-          <div className="flex flex-col sm:flex-row gap-2.5">
-            <input className="input mono" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…" value={webhook}
-              onChange={e => setWebhook(e.target.value)} />
-            <button className="btn btn-primary shrink-0" onClick={() => saveSetting('webhook_url', webhook).then(() => setWebhookSaved(webhook))}>
-              {webhookSaved === webhook && webhookSaved ? '✓ 已保存' : '保存'}
-            </button>
+          <div className="flex items-center gap-2.5 mb-1.5">
+            <h3 className="font-semibold text-[14.5px] text-[var(--text-hi)]">公开状态页</h3>
+            <span className="pill" style={statusTok
+              ? { background: 'var(--ok-bg)', color: 'var(--ok)' }
+              : { background: 'var(--neutral-bg)', color: 'var(--text-mute)' }}>
+              {statusTok ? '● 分享中' : '○ 未开启'}
+            </span>
           </div>
+          <p className="text-[12px] text-[var(--text-faint)] mb-3">
+            生成只读分享链接：健康概览 + 主机状态 + 待处理发现，每分钟自动刷新。不含主机地址、凭据与巡检证据。
+          </p>
+          {statusTok ? (
+            <div className="space-y-2.5">
+              <div className="flex flex-col sm:flex-row gap-2.5">
+                <input className="input mono text-[11.5px]" readOnly value={`${location.protocol}//${location.host}/status/${statusTok}`} onFocus={e => e.target.select()} />
+                <button className="btn btn-primary shrink-0"
+                  onClick={() => navigator.clipboard.writeText(`${location.protocol}//${location.host}/status/${statusTok}`)}>复制链接</button>
+              </div>
+              <div className="flex gap-2.5">
+                <a className="btn shrink-0" href={`/status/${statusTok}`} target="_blank" rel="noreferrer">预览 ↗</a>
+                <button className="btn btn-ghost shrink-0" title="旧链接立即失效"
+                  onClick={() => api<{ token: string }>('/status/token', { method: 'POST' }).then(r => setStatusTok(r.token))}>↻ 换新链接</button>
+                <button className="btn btn-ghost shrink-0" style={{ color: 'var(--crit)' }}
+                  onClick={() => api('/status/token', { method: 'DELETE' }).then(() => setStatusTok(''))}>关闭并撤销</button>
+              </div>
+            </div>
+          ) : (
+            <button className="btn btn-primary" onClick={() => api<{ token: string }>('/status/token', { method: 'POST' }).then(r => setStatusTok(r.token))}>
+              生成分享链接
+            </button>
+          )}
+        </div>
+
+        <div className="card p-5">
+          <div className="flex items-center gap-2.5 mb-1.5">
+            <h3 className="font-semibold text-[14.5px] text-[var(--text-hi)]">通知渠道</h3>
+            <span className="pill" style={notifyUrl
+              ? { background: 'var(--ok-bg)', color: 'var(--ok)' }
+              : { background: 'var(--neutral-bg)', color: 'var(--text-mute)' }}>
+              {notifyUrl ? `● ${notifyLabels[notifyChannel] ?? notifyChannel}` : '○ 未配置'}
+            </span>
+          </div>
+          <p className="text-[12px] text-[var(--text-faint)] mb-3">
+            crit 发现 / 告警恢复 / 持续告警外呼推送；免打扰时段内只记事件不外呼
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 mb-2.5">
+            <div>
+              <div className="text-[11px] text-[var(--text-faint)] mb-1.5">渠道</div>
+              <select className="input" value={notifyChannel}
+                onChange={e => { setNotifyChannel(e.target.value); saveSetting('notify_channel', e.target.value) }}>
+                {Object.entries(notifyLabels).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+              </select>
+            </div>
+            <div>
+              <div className="text-[11px] text-[var(--text-faint)] mb-1.5">
+                {notifyChannel === 'telegram' ? 'Bot Token' : notifyChannel === 'serverchan' ? 'SendKey' : 'Webhook 地址'}
+              </div>
+              <input className="input mono" value={notifyUrl}
+                placeholder={notifyChannel === 'telegram' ? '123456:ABC-DEF…' : notifyChannel === 'serverchan' ? 'SCT…' : 'https://…webhook/send?key=…'}
+                onChange={e => setNotifyUrl(e.target.value)}
+                onBlur={() => saveSetting('webhook_url', notifyUrl)} />
+            </div>
+            {notifyChannel === 'telegram' && (
+              <div className="sm:col-span-2">
+                <div className="text-[11px] text-[var(--text-faint)] mb-1.5">Chat ID（把消息发给谁，@userinfobot 可查）</div>
+                <input className="input mono" placeholder="-100123456789" value={notifyChatId}
+                  onChange={e => setNotifyChatId(e.target.value)}
+                  onBlur={() => saveSetting('telegram_chat_id', notifyChatId)} />
+              </div>
+            )}
+            <div>
+              <div className="text-[11px] text-[var(--text-faint)] mb-1.5">免打扰时段（可跨午夜，空 = 关闭）</div>
+              <input className="input mono" placeholder="23:00-08:00" value={notifyQuiet}
+                onChange={e => setNotifyQuiet(e.target.value)}
+                onBlur={() => saveSetting('quiet_hours', notifyQuiet)} />
+            </div>
+            <div>
+              <div className="text-[11px] text-[var(--text-faint)] mb-1.5">crit 持续告警重发（分钟，0 = 关）</div>
+              <input className="input num" placeholder="0" value={notifyResend}
+                onChange={e => setNotifyResend(e.target.value)}
+                onBlur={() => saveSetting('notify_resend_min', notifyResend || '0')} />
+            </div>
+          </div>
+          <div className="flex items-center gap-2.5 mt-3.5">
+            <button className="btn" disabled={!notifyUrl || testingNotify}
+              onClick={() => { setTestingNotify(true); api('/notify/test', { method: 'POST' })
+                .then(() => setNotifyMsg('✓ 测试通知已发送，检查你的群/会话'))
+                .catch(e => setNotifyMsg(`✕ ${e.message}`))
+                .finally(() => setTestingNotify(false)) }}>
+              {testingNotify ? '发送中…' : '发送测试通知'}
+            </button>
+            {notifyMsg && <span className="text-[12px]" style={{ color: notifyMsg.startsWith('✓') ? 'var(--ok)' : 'var(--crit)' }}>{notifyMsg}</span>}
+          </div>
+          {notifyLog.length > 0 && (
+            <div className="mt-3.5">
+              <div className="text-[11px] text-[var(--text-faint)] mb-1.5">最近发送记录（含失败与免打扰拦截）</div>
+              <div className="space-y-1">
+                {notifyLog.slice(0, 5).map(l => (
+                  <div key={l.id} className="flex items-center gap-2 text-[11.5px]">
+                    <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: l.ok ? 'var(--ok)' : 'var(--crit)' }} />
+                    <span className="text-[var(--text-faint)] num w-14 shrink-0">{fmtTime(l.ts).slice(-8)}</span>
+                    <span className="pill text-[10px] shrink-0" style={{ background: 'var(--neutral-bg)', color: 'var(--text-mute)' }}>
+                      {notifyLabels[l.channel] ?? l.channel}
+                    </span>
+                    <span className="text-[var(--text)] truncate">{l.kind}: {l.text}</span>
+                    {!l.ok && l.error && <span className="text-[var(--crit)] shrink-0 truncate max-w-[160px]" title={l.error}>{l.error}</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="card p-5">

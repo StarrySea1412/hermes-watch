@@ -52,6 +52,11 @@ CREATE TABLE IF NOT EXISTS proposal_runs(
   mode TEXT, command TEXT, risk TEXT,
   status TEXT, exit_code INTEGER, output TEXT, duration_ms INTEGER
 );
+CREATE TABLE IF NOT EXISTS notify_log(
+  id INTEGER PRIMARY KEY,
+  ts REAL, kind TEXT, text TEXT, channel TEXT,
+  ok INTEGER, error TEXT DEFAULT ''
+);
 """
 
 
@@ -68,6 +73,14 @@ MIGRATIONS = [
     "ALTER TABLE hosts ADD COLUMN agent_token TEXT DEFAULT ''",
     # Go agent 上报的 extras（进程/失败服务/证书），host_detail 直接展示
     "ALTER TABLE hosts ADD COLUMN last_extras TEXT DEFAULT ''",
+    # 在线判定与采集错误：last_ok_ts 为最近一次成功采集（SSH 或 agent push）时间
+    "ALTER TABLE hosts ADD COLUMN last_ok_ts REAL DEFAULT 0",
+    "ALTER TABLE hosts ADD COLUMN last_error TEXT DEFAULT ''",
+    # 告警生命周期：连续 ok_streak 轮未再触发 → 自动 resolved；resolved_at 记录恢复时间
+    "ALTER TABLE findings ADD COLUMN ok_streak INTEGER DEFAULT 0",
+    "ALTER TABLE findings ADD COLUMN resolved_at REAL",
+    # crit 告警周期重发：上次外发通知时间
+    "ALTER TABLE findings ADD COLUMN last_notified REAL",
 ]
 
 

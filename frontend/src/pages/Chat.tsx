@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, fmtTime } from '../api'
+import { fmtTime } from '../api'
 import { Ic } from '../icons'
 import { PageHead } from '../ui'
 
-type Msg = { role: 'user' | 'bot'; text: string; source?: string; ts: number }
+type Msg = { role: 'user' | 'bot'; text: string; source?: string; ts: number; streaming?: boolean }
 
 const QUICK = [
   '现在 fleet 整体健康状况如何？',
@@ -63,14 +63,46 @@ export default function Chat() {
     setInput('')
     if (taRef.current) taRef.current.style.height = 'auto'
     setBusy(true)
+    // 先落一个流式占位消息，token 到达即渐进填充（SSE /api/chat/stream）
+    setMsgs(m => [...m, { role: 'bot', text: '', ts: Date.now() / 1000, streaming: true }])
     try {
-      const r = await api<{ answer: string; source: string }>('/chat', {
-        method: 'POST', body: JSON.stringify({ question, history }),
+      const r = await fetch('/api/chat/stream', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question, history }),
       })
-      setMsgs(m => [...m, { role: 'bot', text: r.answer, source: r.source, ts: Date.now() / 1000 }])
+      if (r.status === 401) { location.href = '/login'; return }
+      if (!r.ok || !r.body) throw new Error(`HTTP ${r.status}`)
+      const reader = r.body.getReader()
+      const dec = new TextDecoder()
+      let buf = ''
+      let done = false
+      while (!done) {
+        const { value, done: rdDone } = await reader.read()
+        if (rdDone) break
+        buf += dec.decode(value, { stream: true })
+        let idx
+        while ((idx = buf.indexOf('\n\n')) >= 0) {
+          const frame = buf.slice(0, idx).trim()
+          buf = buf.slice(idx + 2)
+          if (!frame.startsWith('data:')) continue
+          try {
+            const evt = JSON.parse(frame.slice(5).trim())
+            if (evt.type === 'meta') {
+              setMsgs(m => m.map((msg, i) => i === m.length - 1 && msg.role === 'bot' ? { ...msg, source: evt.source } : msg))
+            } else if (evt.type === 'delta') {
+              setMsgs(m => m.map((msg, i) => i === m.length - 1 && msg.role === 'bot' ? { ...msg, text: msg.text + evt.text } : msg))
+            } else if (evt.type === 'done') done = true
+          } catch { /* 忽略残帧 */ }
+        }
+      }
     } catch (e: any) {
-      setMsgs(m => [...m, { role: 'bot', text: `请求失败: ${e.message}`, ts: Date.now() / 1000 }])
-    } finally { setBusy(false) }
+      setMsgs(m => m.map((msg, i) => i === m.length - 1 && msg.role === 'bot' && msg.streaming
+        ? { ...msg, text: msg.text ? `${msg.text}\n\n（连接中断: ${e.message}）` : `请求失败: ${e.message}` }
+        : msg))
+    } finally {
+      setBusy(false)
+      setMsgs(m => m.map((msg, i) => i === m.length - 1 && msg.role === 'bot' ? { ...msg, streaming: false } : msg))
+    }
   }
 
   const copyMsg = async (i: number, text: string) => {
@@ -141,7 +173,10 @@ export default function Chat() {
                   <span className="ml-auto text-[10.5px] text-[var(--text-faint)] num opacity-0 group-hover:opacity-100 transition-opacity">{fmtTime(m.ts)}</span>
                 </div>
                 <div className="card px-4 py-3 relative" style={{ borderRadius: '4px 18px 18px 18px' }}>
-                  <div className="text-[13.5px] leading-relaxed whitespace-pre-wrap text-[var(--text)]">{m.text}</div>
+                  <div className="text-[13.5px] leading-relaxed whitespace-pre-wrap text-[var(--text)]">
+                    {m.text}
+                    {m.streaming && <span className="stream-cursor">▍</span>}
+                  </div>
                   <button title="复制回答" onClick={() => copyMsg(i, m.text)}
                     className="absolute top-2 right-2 w-7 h-7 rounded-lg flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
                     style={{ background: 'var(--neutral-bg)', border: '1px solid var(--border)', color: copied === i ? 'var(--ok)' : 'var(--text-mute)' }}>
@@ -152,7 +187,7 @@ export default function Chat() {
             </div>
           ))}
 
-          {busy && (
+          {busy && msgs.at(-1)?.role === 'bot' && !msgs.at(-1)?.text && (
             <div className="flex gap-3 fade-in">
               <div className="w-8 h-8 rounded-full shrink-0 flex items-center justify-center mt-0.5"
                 style={{ background: 'var(--accent-dim)', border: '1px solid var(--accent-border)', color: 'var(--accent)' }}>

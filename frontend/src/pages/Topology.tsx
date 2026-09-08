@@ -11,7 +11,7 @@ import { alpha, useChartPalette } from '../theme'
  * Hub 居中发光，主机按健康状态分层（严重内圈 → 警告中圈 → 健康外圈），
  * 节点为径向渐变圆 + 状态色粗环 + 内嵌图标 + 外发光，卡片顶部常驻状态统计条。
  */
-const RING: Record<HostCard['status'], number> = { crit: 150, warn: 240, ok: 330 }
+const RING: Record<HostCard['status'], number> = { crit: 150, warn: 240, ok: 330, offline: 330 }
 
 export default function Topology() {
   const [hosts, setHosts] = useState<HostCard[]>([])
@@ -51,9 +51,11 @@ export default function Topology() {
     if (!chart || !hosts.length || !P['--bg-panel']) return
 
     const colorOf = (h: HostCard) =>
-      h.status === 'ok' ? P['--ok'] : h.status === 'warn' ? P['--warn'] : P['--crit']
+      h.status === 'ok' ? P['--ok'] : h.status === 'warn' ? P['--warn']
+        : h.status === 'offline' ? P['--text-faint'] : P['--crit']
     const fillOf = (h: HostCard) =>
-      h.status === 'ok' ? P['--node-ok'] : h.status === 'warn' ? P['--node-warn'] : P['--node-crit']
+      h.status === 'ok' ? P['--node-ok'] : h.status === 'warn' ? P['--node-warn']
+        : h.status === 'offline' ? P['--text-faint'] : P['--node-crit']
     // 径向渐变：中心近乎透明 → 状态色薄雾 → 底色实体，比平涂立体
     const gradientOf = (h: HostCard) => ({
       type: 'radial', x: 0.5, y: 0.5, r: 0.5,
@@ -92,11 +94,11 @@ export default function Topology() {
     const links: any[] = []
 
     // 分层布环：每个状态环内均匀分布 + 微抖动打破呆板对称；主机少时整体收拢
-    const byStatus: Record<string, HostCard[]> = { crit: [], warn: [], ok: [] }
+    const byStatus: Record<string, HostCard[]> = { crit: [], warn: [], ok: [], offline: [] }
     hosts.forEach(h => (byStatus[h.status] ?? byStatus.ok).push(h))
     const shrink = hosts.length <= 3 ? 0.78 : 1
-    const ringStart: Record<string, number> = { crit: 0.4, warn: 0.9, ok: 0.05 }
-    for (const st of ['crit', 'warn', 'ok'] as const) {
+    const ringStart: Record<string, number> = { crit: 0.4, warn: 0.9, ok: 0.05, offline: 0.05 }
+    for (const st of ['crit', 'warn', 'ok', 'offline'] as const) {
       const arr = byStatus[st]
       arr.forEach((h, i) => {
         const angle = ringStart[st] + (i / arr.length) * Math.PI * 2
@@ -123,8 +125,8 @@ export default function Topology() {
         links.push({
           source: 'hub', target: String(h.id),
           lineStyle: { color: c, width: st === 'ok' ? 1.4 : st === 'warn' ? 2.2 : 2.6,
-                       curveness: 0.12, type: st === 'crit' ? [7, 7] : 'solid',
-                       opacity: st === 'ok' ? 0.75 : 1 },
+                       curveness: 0.12, type: st === 'crit' ? [7, 7] : st === 'offline' ? [3, 6] : 'solid',
+                       opacity: st === 'ok' ? 0.75 : st === 'offline' ? 0.5 : 1 },
         })
       })
     }
@@ -168,6 +170,7 @@ export default function Topology() {
     ok: hosts.filter(h => h.status === 'ok').length,
     warn: hosts.filter(h => h.status === 'warn').length,
     crit: hosts.filter(h => h.status === 'crit').length,
+    offline: hosts.filter(h => h.status === 'offline').length,
     findings: hosts.reduce((s, h) => s + h.open_findings, 0),
   }), [hosts])
 
@@ -187,6 +190,7 @@ export default function Topology() {
           {chip('var(--ok)', 'var(--ok-bg)', 'var(--ok)', `${stats.ok} 健康`)}
           {stats.warn > 0 && chip('var(--warn)', 'var(--warn-bg)', 'var(--warn)', `${stats.warn} 警告`)}
           {stats.crit > 0 && chip('var(--crit)', 'var(--crit-bg)', 'var(--crit)', `${stats.crit} 严重`)}
+          {stats.offline > 0 && chip('var(--text-mute)', 'var(--neutral-bg)', 'var(--text-faint)', `${stats.offline} 离线`)}
           {stats.findings > 0 && chip('var(--text-mute)', 'var(--neutral-bg)', 'var(--text-faint)', `${stats.findings} 待处理发现`)}
           <span className="ml-auto text-[10.5px] text-[var(--text-faint)]">滚轮缩放 · 拖拽平移 · 悬停看指标</span>
         </div>

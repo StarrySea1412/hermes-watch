@@ -7,6 +7,7 @@ export type IconName =
   | 'zap' | 'sliders' | 'trash' | 'sun' | 'moon' | 'monitor' | 'menu'
   | 'alert' | 'check-circle' | 'x-circle' | 'plus' | 'pen' | 'flask'
   | 'radio' | 'search' | 'download' | 'play' | 'refresh' | 'globe' | 'copy' | 'send'
+  | 'bell' | 'wifi-off'
 
 const PATHS: Record<IconName, ReactNode> = {
   grid: (<><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></>),
@@ -37,6 +38,8 @@ const PATHS: Record<IconName, ReactNode> = {
   globe: (<><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18" /></>),
   copy: (<><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></>),
   send: (<path d="M12 19V5M5 12l7-7 7 7" />),
+  bell: (<><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.7 21a2 2 0 0 1-3.4 0" /></>),
+  'wifi-off': (<><path d="M2 2l20 20" /><path d="M8.5 16.4a5 5 0 0 1 7 0" /><path d="M5 12.9a10 10 0 0 1 5.2-2.8M18.6 15a10 10 0 0 0-3.1-2.3M2 9.4A15 15 0 0 1 8 6.4M22 9.4a15 15 0 0 0-8-3.9" /><circle cx="12" cy="20" r="0.8" fill="currentColor" /></>),
 }
 
 export function Ic({ name, size = 16, sw = 2, style, className }: {

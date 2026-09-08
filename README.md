@@ -10,9 +10,12 @@
 浏览器 (React + ECharts + xterm.js, :5273)
    │ /api 代理 · /ws WebSocket
 后端 (FastAPI + SQLite, :8800)
-   ├─ 采集层   SSH 只读探测（asyncssh） / 内置演示模拟器（实时行走曲线）
+   ├─ 采集层   SSH 只读探测（asyncssh，并发限流）/ 内置演示模拟器（实时行走曲线）
    │           出站 Agent（beszel 式：目标机 sh+curl 主动 push，免入站端口）
-   ├─ 规则引擎  确定性阈值规则（可在设置页调整）→ 发现 + 健康分（先于一切 AI）
+   │           在线判定：3 个巡检周期无成功采集 → 主机标记离线（Fleet/拓扑可视化）
+   ├─ 规则引擎  确定性阈值规则（阈值 + 滞后恢复线，可在设置页调整）→ 发现 + 健康分
+   ├─ 告警生命周期  自动恢复（连续 3 轮未再触发 → resolved + 恢复通知带持续时长）
+   │           crit 持续告警周期重发 · 免打扰时段（跨午夜）· 多渠道通知
    ├─ 分析引擎  按发现类型深挖（du/ps/last/systemctl）→ 根因卡 + 证据链
    │           （可选：OpenAI 兼容 LLM 叙事，默认关，BYO；AI 只补充视角，不覆盖规则结论，backend/mock_llm.py 提供本地试运行端点）
    ├─ 提案审批  修复动作 = 卡片，批准才执行，全审计（只读提议制）
@@ -62,6 +65,7 @@ npm run dev                          # http://localhost:5273
 - **故障注入**：`./chaos.sh disk demo-db-1` 观察告警→诊断→提案全链路
 - **WSL 当服务器（已实战验证）**：`sudo apt install openssh-server && systemctl enable --now ssh`，把 WSL IP（`hostname -I`）添加进面板。密码留空 = 自动使用本机 `~/.ssh/id_ed25519` 密钥免密登录（公钥需在目标机 `authorized_keys` 中）。注意：WSL2 空闲约 60s 会回收整个 VM，sshd 随之消失——保持 WSL 终端开着，或在 `%UserProfile%\.wslconfig` 配 `[wsl2] vmIdleTimeout=-1`
 - **接入任意 LLM**：MCP 客户端（Claude Desktop / Cursor）配置 `http://127.0.0.1:8800/api/mcp`，5 个只读工具直查巡检数据；LLM 调用链路详解见 [`docs/LLM.md`](docs/LLM.md)
+- **告警通知**：设置 → 通知渠道，支持企业微信 / 钉钉 / 飞书 / Telegram / Server酱 / 通用 Webhook；crit 告警推送、恢复通知（带持续时长）、持续告警周期重发、免打扰时段，发送前可一键测试
 - **本地试 AI 叙事（无需真实 LLM）**：`py backend/mock_llm.py`（内置本地 mock 端点 :18777）→ 设置页 Base URL 填 `http://127.0.0.1:18777/v1`，开启 AI 外发后重新诊断即可看到「AI 叙事」区块
 
 ## 设计铁律（来自竞品调研，见 `docs/`）
@@ -82,5 +86,9 @@ npm run dev                          # http://localhost:5273
 - [x] 提案可执行（批准与执行分离：白名单正则校验 + 超时拦截 + proposal_runs 全审计 + mock 主机真实恢复；执行开关默认关）
 - [x] 面板访问控制（可选口令门：PBKDF2 口令存储 + HMAC 签名 Cookie 会话 + 登录限速；出站 Agent 与本地 MCP 各走通道不受影响；设置页可开关/改口令，默认关闭）
 - [x] 出站 Agent 单二进制（Go，纯 stdlib）：HMAC-SHA256 签名 + 时间戳防重放，新增进程/失败服务/证书上报，extras 入库并驱动规则引擎；保留 sh+curl 轻量版
-- [x] 工程化：路由懒加载 + echarts/xterm 独立分包（主包 1.4MB → 242KB）、指标默认保留 7 天（可配）、`py backend/run_tests.py` 43 项回归全绿
+- [x] 工程化：路由懒加载 + echarts/xterm 独立分包（主包 1.4MB → 242KB）、指标默认保留 7 天（可配）、`py backend/run_tests.py` 69 项回归全绿
+- [x] 告警生命周期层（对标 Uptime Kuma / Gatus / Netdata，见 `docs/竞品调研.md`）：告警自动恢复 + 恢复通知带持续时长、阈值滞后双阈值防抖、crit 持续告警周期重发、免打扰时段（跨午夜）、主机离线检测与可视化、6 渠道通知（企业微信/钉钉/飞书/Telegram/Server酱/通用 Webhook，设置页可测活 + 发送留痕）
+- [x] AI 对话流式输出（SSE 逐 token，LLM 关闭自动降级本地规则引擎摘要）+ LLM 出站脱敏（k8sgpt 式 anonymize：主机名/IP/用户名出站前替换占位符，映射不落盘，回答映射回真实名）
+- [x] 巡检心跳条带图（主机详情 48 桶上下状态带）+ PWA 可安装（manifest + service worker，仅生产注册）+ 公开状态页（设置页一键生成带 token 只读分享链接，60s 自动刷新，不含地址/凭据/证据，可随时撤销）
+- [ ] i18n 骨架
 - [ ] 多用户与 RBAC（当前为单机单租户）
