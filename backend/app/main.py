@@ -576,6 +576,47 @@ async def ws_terminal(ws: WebSocket, hid: int):
                 pass
 
 
+@app.post("/api/findings/{fid}/ack")
+async def ack_finding(fid: int):
+    """人工确认告警：已知悉，停止 crit 周期重发（恢复后状态照常流转）。"""
+    f = db.query_one("SELECT * FROM findings WHERE id=?", (fid,))
+    if not f:
+        raise HTTPException(404, "finding 不存在")
+    if f["acked_at"]:
+        raise HTTPException(400, "该发现已确认过")
+    db.execute("UPDATE findings SET acked_at=? WHERE id=?", (db.now(), fid))
+    await broadcast("proposal", f"发现已确认: {f['title']}", {"finding_id": fid})
+    return {"ok": True}
+
+
+class SilenceIn(BaseModel):
+    minutes: int  # >0 = 静默 N 分钟，0 = 取消静默
+
+
+@app.post("/api/hosts/{hid}/silence")
+async def silence_host(hid: int, s: SilenceIn):
+    h = db.query_one("SELECT * FROM hosts WHERE id=?", (hid,))
+    if not h:
+        raise HTTPException(404, "主机不存在")
+    until = db.now() + s.minutes * 60 if s.minutes > 0 else 0
+    db.execute("UPDATE hosts SET silenced_until=? WHERE id=?", (until, hid))
+    await broadcast("host",
+                    f"{h['name']} 已静默 {s.minutes} 分钟" if s.minutes > 0
+                    else f"{h['name']} 已取消静默", {"host_id": hid})
+    return {"ok": True, "silenced_until": until}
+
+
+@app.post("/api/hosts/{hid}/trust-key")
+async def trust_host_key(hid: int):
+    """人工确认后重置主机指纹（下次连接重新 TOFU 记录）。"""
+    h = db.query_one("SELECT * FROM hosts WHERE id=?", (hid,))
+    if not h:
+        raise HTTPException(404, "主机不存在")
+    db.execute("UPDATE hosts SET host_key_fp='', last_error='' WHERE id=?", (hid,))
+    await broadcast("host", f"{h['name']} 主机指纹已重置，下次连接将重新记录", {"host_id": hid})
+    return {"ok": True}
+
+
 # ---------- outbound agent endpoints (beszel-style) ----------
 
 @app.post("/api/hosts/{hid}/agent-token")

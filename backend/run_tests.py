@@ -300,6 +300,67 @@ def t_notify_log():
     check("未配置渠道 ok=0 error=未配置", row["ok"] == 0 and row["error"] == "未配置")
 
 
+def t_tofu():
+    print("[tofu]")
+    from app import ssh
+    hid = db.execute(
+        "INSERT INTO hosts(name,hostname,group_name,mock,created_at,host_key_fp) "
+        "VALUES('__t_tofu__','x','t',1,?, '')", (db.now(),))
+    h = db.query_one("SELECT * FROM hosts WHERE id=?", (hid,))
+    class _K:
+        def get_fingerprint(self, algo="sha256"): return "SHA256:AAA"
+    # 首次连接：记录指纹并放行
+    ok = ssh._TofuClient(dict(h)).validate_host_public_key("x", "x", 22, _K())
+    stored = db.query_one("SELECT host_key_fp FROM hosts WHERE id=?", (hid,))["host_key_fp"]
+    check("首次连接放行并记录指纹", ok and stored == "SHA256:AAA")
+    # 指纹一致放行
+    ok2 = ssh._TofuClient(dict(db.query_one("SELECT * FROM hosts WHERE id=?", (hid,)))).validate_host_public_key("x", "x", 22, _K())
+    check("指纹一致放行", ok2)
+    # 指纹变更 → HostKeyChanged
+    class _K2:
+        def get_fingerprint(self, algo="sha256"): return "SHA256:BBB"
+    try:
+        ssh._TofuClient(dict(db.query_one("SELECT * FROM hosts WHERE id=?", (hid,)))).validate_host_public_key("x", "x", 22, _K2())
+        check("指纹变更拒绝", False)
+    except ssh.HostKeyChanged as e:
+        check("指纹变更拒绝", "变更" in str(e))
+    check("库中指纹未被污染", db.query_one("SELECT host_key_fp FROM hosts WHERE id=?", (hid,))["host_key_fp"] == "SHA256:AAA")
+    db.execute("DELETE FROM hosts WHERE id=?", (hid,))
+
+
+def t_ack_and_silence():
+    print("[ack-silence]")
+    # _resend_crit 前置要求渠道已配置（否则直接返回），注入假 webhook
+    db.execute("INSERT INTO settings(key,value) VALUES('webhook_url','https://example.invalid/hook') "
+               "ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+    db.execute("INSERT INTO settings(key,value) VALUES('notify_resend_min','30') "
+               "ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+    hid = db.execute(
+        "INSERT INTO hosts(name,hostname,group_name,mock,created_at,silenced_until) "
+        "VALUES('__t_ack__','x','t',1,?, 0)", (db.now(),))
+    fid = db.execute(
+        "INSERT INTO findings(host_id,ts,type,severity,title,detail,evidence) VALUES(?,?,?,?,?,?,?)",
+        (hid, db.now() - 1900, "cpu", "crit", "【测试】CPU 100%", "test", "{}"))  # ts 拨回 31 分钟前，越过重发窗口
+    from app import scheduler
+    q_rows = lambda: scheduler.db.query(
+        "SELECT id, host_id, type, severity, ts, last_notified, acked_at, title FROM findings WHERE id=?", (fid,))
+    scheduler._resend_crit("t", q_rows(), {"cpu"})
+    last1 = db.query_one("SELECT last_notified FROM findings WHERE id=?", (fid,))["last_notified"]
+    check("未确认未静默且超重发窗口 → last_notified 更新", last1 is not None)
+    # 确认后 → 不再重发（重查行，模拟真实每轮快照）
+    db.execute("UPDATE findings SET last_notified=NULL, acked_at=? WHERE id=?", (db.now(), fid))
+    scheduler._resend_crit("t", q_rows(), {"cpu"})
+    check("已确认 → 跳过重发", db.query_one("SELECT last_notified FROM findings WHERE id=?", (fid,))["last_notified"] is None)
+    # 静默中 → 跳过重发
+    db.execute("UPDATE findings SET acked_at=NULL WHERE id=?", (fid,))
+    db.execute("UPDATE hosts SET silenced_until=? WHERE id=?", (db.now() + 600, hid))
+    scheduler._resend_crit("t", q_rows(), {"cpu"})
+    check("静默中 → 跳过重发", db.query_one("SELECT last_notified FROM findings WHERE id=?", (fid,))["last_notified"] is None)
+    db.execute("DELETE FROM findings WHERE id=?", (fid,))
+    db.execute("DELETE FROM hosts WHERE id=?", (hid,))
+    db.execute("DELETE FROM settings WHERE key IN ('notify_resend_min','webhook_url')")
+
+
 if __name__ == "__main__":
     db.init_db()
     t_rules()
@@ -317,5 +378,7 @@ if __name__ == "__main__":
     t_anonymize()
     t_chat_stream_fallback()
     t_notify_log()
+    t_tofu()
+    t_ack_and_silence()
     print(f"\n{PASS} passed, {FAIL} failed")
     sys.exit(1 if FAIL else 0)

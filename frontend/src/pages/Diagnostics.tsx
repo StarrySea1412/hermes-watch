@@ -173,6 +173,18 @@ export default function Diagnostics() {
                     {busy ? <><span className="pulse-dot" style={{ background: 'var(--accent)' }} /> 诊断中…</> : <><Ic name="play" size={13} /> Agent 深挖诊断</>}
                   </button>
                 )}
+                {current.status !== 'resolved' && !current.acked_at && (
+                  <button disabled={busy} title="已知悉此告警：停止持续告警重发"
+                    onClick={() => api(`/findings/${current.id}/ack`, { method: 'POST' }).then(load).catch(() => { /* noop */ })}
+                    className="btn shrink-0" style={{ background: 'var(--neutral-bg)', color: 'var(--text-mute)' }}>
+                    <Ic name="check-circle" size={13} /> 确认
+                  </button>
+                )}
+                {current.acked_at ? (
+                  <span className="pill shrink-0" style={{ background: 'var(--neutral-bg)', color: 'var(--text-mute)' }}>
+                    ✓ 已确认（不重发）
+                  </span>
+                ) : null}
               </div>
 
               {/* 诊断流水线 */}

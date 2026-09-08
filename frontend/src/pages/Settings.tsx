@@ -463,11 +463,13 @@ export default function Settings() {
           <table className="w-full text-[13px]">
           <thead>
             <tr className="text-[11px] text-[var(--text-faint)] text-left border-b border-[var(--border)]">
-              <th className="py-2.5 font-medium">名称</th><th className="font-medium">地址</th><th className="font-medium">分组</th><th className="font-medium">类型</th><th></th>
+              <th className="py-2.5 font-medium">名称</th><th className="font-medium">地址</th><th className="font-medium">分组</th><th className="font-medium">类型</th><th className="font-medium">状态</th><th></th>
             </tr>
           </thead>
           <tbody>
-            {hosts.map(h => (
+            {hosts.map(h => {
+              const silenced = h.silenced_until ? h.silenced_until * 1000 > Date.now() : false
+              return (
               <tr key={h.id} className="border-b border-[var(--border)] last:border-0 hover:bg-[var(--bg-hover)] transition-colors">
                 <td className="py-2.5 font-medium text-[var(--text-hi)]">{h.name}</td>
                 <td className="text-[var(--text-mute)] mono text-[12px]">{h.hostname}</td>
@@ -479,11 +481,29 @@ export default function Settings() {
                     {h.mock ? '演示' : 'SSH'}
                   </span>
                 </td>
-                <td className="text-right">
+                <td>
+                  {silenced
+                    ? <span className="pill" style={{ background: 'var(--warn-bg)', color: 'var(--warn)', fontSize: 10 }}>静默中</span>
+                    : <span className="text-[11px] text-[var(--text-faint)]">—</span>}
+                </td>
+                <td className="text-right whitespace-nowrap">
+                  <button className="text-[12px] text-[var(--text-faint)] hover:text-[var(--warn)] mr-3"
+                    title="N 分钟内不发送该主机的告警外呼"
+                    onClick={() => {
+                      const v = prompt('静默多少分钟？（0 = 取消静默）', silenced ? '0' : '60')
+                      if (v === null) return
+                      api(`/hosts/${h.id}/silence`, { method: 'POST', body: JSON.stringify({ minutes: Number(v) || 0 }) }).then(load)
+                    }}>{silenced ? '取消静默' : '静默'}</button>
+                  {!h.mock && (
+                    <button className="text-[12px] text-[var(--text-faint)] hover:text-[var(--accent)] mr-3"
+                      title="重置 SSH 主机指纹（TOFU）：主机重装系统后使用"
+                      onClick={() => api(`/hosts/${h.id}/trust-key`, { method: 'POST' }).then(load)}>重置指纹</button>
+                  )}
                   {!h.mock && <button onClick={() => del(h)} className="text-[12px] text-[var(--text-faint)] hover:text-[var(--crit)]">删除</button>}
                 </td>
               </tr>
-            ))}
+              )
+            })}
           </tbody>
         </table>
         </div>

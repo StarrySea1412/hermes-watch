@@ -1,9 +1,10 @@
 // API client + shared types
-export type Host = { id: number; name: string; hostname: string; group: string; username: string; mock: boolean }
+export type Host = { id: number; name: string; hostname: string; group: string; username: string; mock: boolean; silenced_until?: number }
 export type HostCard = {
   id: number; name: string; hostname: string; group: string; mock: boolean
   score: number; status: 'ok' | 'warn' | 'crit' | 'offline'
   online: boolean; last_ok_ts: number; last_error: string
+  silenced_until?: number
   latest: { cpu: number; mem: number; disk: number; load1: number; net_in: number; net_out: number; ts: number } | null
   spark: { disk: number; mem: number; cpu: number }[]
   open_findings: number; worst: 'crit' | 'warn' | 'info' | null
@@ -12,6 +13,7 @@ export type Finding = {
   id: number; host_id: number; host_name?: string; ts: number
   type: string; severity: 'crit' | 'warn' | 'info'
   title: string; detail: string; evidence: any; status: string
+  acked_at?: number | null
   card: {
     root_cause: string; chain: string[]; confidence: string
     steps: { label: string; command: string; output: string }[]

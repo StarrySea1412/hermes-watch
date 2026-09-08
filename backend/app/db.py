@@ -81,6 +81,11 @@ MIGRATIONS = [
     "ALTER TABLE findings ADD COLUMN resolved_at REAL",
     # crit 告警周期重发：上次外发通知时间
     "ALTER TABLE findings ADD COLUMN last_notified REAL",
+    # 告警确认：人工已知悉后停止重发
+    "ALTER TABLE findings ADD COLUMN acked_at REAL",
+    # SSH TOFU：首次连接记录的主机公钥指纹（SHA256:…）；按主机静默截止时间
+    "ALTER TABLE hosts ADD COLUMN host_key_fp TEXT DEFAULT ''",
+    "ALTER TABLE hosts ADD COLUMN silenced_until REAL DEFAULT 0",
 ]
 
 

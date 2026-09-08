@@ -63,6 +63,17 @@ def _mark_ok(host_id: int) -> None:
 
 
 def _mark_err(host_id: int, err: Exception) -> None:
+    # 主机指纹变更 = 安全事件，与普通采集失败区分（醒目事件 + 事件流置顶）
+    from .ssh import HostKeyChanged
+    if isinstance(err, HostKeyChanged):
+        db.execute("UPDATE hosts SET last_error=? WHERE id=?", ("HostKeyChanged", host_id))
+        msg = f"安全告警: {err}——疑似中间人或系统重装，采集已拒绝连接；确认后可在设置页重置该主机指纹"
+        db.execute("INSERT INTO events(ts,host_id,kind,message,data) VALUES(?,?,?,?,?)",
+                   (db.now(), host_id, "finding", msg, db.j({"count": 1})))
+        if _notify_broadcast:
+            _spawn(_notify_broadcast("finding", msg, {}))
+        _spawn(notify.send("SSH 指纹变更", msg.split(": ", 1)[-1]))
+        return
     db.execute("UPDATE hosts SET last_error=? WHERE id=?", (type(err).__name__, host_id))
     _log_collect_error(host_id, f"采集失败: {type(err).__name__}")
 
@@ -117,12 +128,17 @@ def _check_recovery(host_id: int, active_types: set[str]) -> int:
 
 
 def _resend_crit(host_name: str, open_rows: list[dict], active_types: set[str]) -> None:
-    """crit 发现持续未恢复 → 按 notify_resend_min 周期重发提醒（0 = 关闭）。"""
+    """crit 发现持续未恢复 → 按 notify_resend_min 周期重发提醒（0 = 关闭）。
+    已确认（acked_at 非空）或主机处于静默窗口的发现不重发。"""
     minutes = _setting_int("notify_resend_min", 0)
     if minutes <= 0 or not notify.configured():
         return
+    silences = {r["id"]: (r["silenced_until"] or 0)
+                for r in db.query("SELECT id, silenced_until FROM hosts")}
     for r in open_rows:
-        if r["severity"] != "crit" or r["type"] not in active_types:
+        if r["severity"] != "crit" or r["type"] not in active_types or r["acked_at"]:
+            continue
+        if silences.get(r["host_id"], 0) > db.now():
             continue
         last = r["last_notified"] or r["ts"] or 0
         if db.now() - last >= minutes * 60:
@@ -137,9 +153,10 @@ async def process_findings(h: dict, latest: dict, extras: dict) -> list[dict]:
     triggered = rules.evaluate(h, latest, extras)
     active_types = {f["type"] for f in triggered}
     open_rows = db.query(
-        "SELECT id, type, severity, ts, last_notified, title FROM findings "
+        "SELECT id, host_id, type, severity, ts, last_notified, acked_at, title FROM findings "
         "WHERE host_id=? AND status IN ('open','analyzed')", (h["id"],))
     prev_open = {r["type"] for r in open_rows}
+    silenced = (h.get("silenced_until") or 0) > db.now()
     new = []
     for f in triggered:
         if f["type"] in prev_open:  # one open finding per type per host
@@ -157,7 +174,7 @@ async def process_findings(h: dict, latest: dict, extras: dict) -> list[dict]:
         if _notify_broadcast:
             await _notify_broadcast("finding", f"[{f['severity'].upper()}] {f['title']}",
                                     {"finding_id": fid})
-        if f["severity"] == "crit":
+        if f["severity"] == "crit" and not silenced:
             ok, _ = await notify.send("发现告警", f"{h['name']}: {f['title']}")
             if ok:
                 db.execute("UPDATE findings SET last_notified=? WHERE id=?", (db.now(), fid))

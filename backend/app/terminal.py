@@ -129,15 +129,14 @@ class MockShell:
 
 async def ssh_session(ws, host: dict):
     """Bridge the websocket to an interactive PTY over asyncssh."""
-    from . import secrets as sec
-    secret = sec.decrypt(host.get("secret"))
-    conn = await asyncio.wait_for(
-        asyncssh.connect(host["hostname"], port=host["port"] or 22,
-                         username=host["username"] or "root",
-                         client_keys=sec.default_client_keys() or None,  # 密码留空 = 密钥登录
-                         password=secret or None,
-                         known_hosts=None),
-        timeout=10)
+    from . import ssh
+    try:
+        conn = await ssh.connect_async(host)
+    except Exception as e:
+        # TOFU 指纹变更或其他连接失败：显式告知，不静默
+        await ws.send_text(f"\r\nSSH 连接失败: {type(e).__name__}: {e}\r\n")
+        await ws.close()
+        return
 
     class WsSink(asyncssh.SSHClientSession):
         def data_received(self, data, datatype):

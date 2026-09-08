@@ -79,15 +79,8 @@ async def run_cmd(host: dict, cmd: str, timeout: int = 12) -> str:
     """在目标机上执行一条只读命令并返回 stdout（诊断深挖探针用）。"""
     if asyncssh is None:
         raise RuntimeError("asyncssh 未安装")
-    from . import secrets as sec
-    secret = sec.decrypt(host.get("secret"))
-    conn = await asyncio.wait_for(
-        asyncssh.connect(host["hostname"], port=host["port"] or 22,
-                         username=host["username"] or "root",
-                         client_keys=sec.default_client_keys() or None,  # 密码留空 = 密钥登录
-                         password=secret or None,
-                         known_hosts=None),
-        timeout=10)
+    from . import ssh
+    conn = await ssh.connect_async(host)
     try:
         r = await asyncio.wait_for(conn.run(cmd, check=True), timeout=timeout)
         return r.stdout or ""
@@ -98,15 +91,8 @@ async def run_cmd(host: dict, cmd: str, timeout: int = 12) -> str:
 async def probe_real(host: dict) -> tuple[dict | None, dict]:
     if asyncssh is None:
         raise RuntimeError("asyncssh 未安装")
-    from . import secrets as sec
-    secret = sec.decrypt(host.get("secret"))
-    conn = await asyncio.wait_for(
-        asyncssh.connect(host["hostname"], port=host["port"] or 22,
-                         username=host["username"] or "root",
-                         client_keys=sec.default_client_keys() or None,  # 密码留空 = 密钥登录
-                         password=secret or None,
-                         known_hosts=None),
-        timeout=10)
+    from . import ssh
+    conn = await ssh.connect_async(host)
     try:
         r = await conn.run(PROBE_SCRIPT, check=True)
         base = parse_probe(r.stdout)

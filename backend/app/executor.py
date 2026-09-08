@@ -109,14 +109,8 @@ def _mock_effect(host: dict, command: str) -> str:
 
 
 async def _real_exec(host: dict, command: str) -> tuple[str, int]:
-    import asyncssh
-    secret = secrets.decrypt(host.get("secret"))
-    conn = await asyncio.wait_for(
-        asyncssh.connect(host["hostname"], port=host["port"] or 22,
-                         username=host["username"] or "root",
-                         client_keys=secrets.default_client_keys() or None,  # 密码留空 = 本机默认密钥（与采集一致）
-                         password=secret or None, known_hosts=None),
-        timeout=10)
+    from . import ssh
+    conn = await ssh.connect_async(host)
     try:
         result = await asyncio.wait_for(conn.run(command), timeout=TIMEOUT)
         out = (result.stdout or "") + (result.stderr or "")
