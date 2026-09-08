@@ -260,6 +260,13 @@ def events(limit: int = 80):
 async def gen_report(kind: str = "manual"):
     r = reports.generate(kind)
     await broadcast("report", f"健康报告已生成（整体 {r['overall']} 分）", r)
+    # AI 摘要异步追加（AI 外发开启时）：报告立即可看，摘要稍后出现在第 06 节
+    async def _ai():
+        res = await reports.attach_ai_summary(r["id"])
+        if res.get("ai") or res.get("error"):
+            await broadcast("report", f"报告 #{r['id']} AI 摘要已"
+                            f"{'生成' if res.get('ai') else '失败（规则结论不受影响）'}", {"report_id": r["id"]})
+    asyncio.ensure_future(_ai())
     return r
 
 
@@ -433,10 +440,13 @@ async def llm_models(p: LlmProbeIn):
 @app.post("/api/llm/test")
 async def llm_test(p: LlmProbeIn):
     """测活：对 {base}/chat/completions 发一次真实最小生成请求并计时。
-    与诊断叙事走完全相同的路径，通了就代表 AI 叙事可用。"""
-    base = p.base_url.strip().rstrip("/")
-    if not base:
+    与诊断叙事走完全相同的路径，通了就代表 AI 叙事可用。
+    base 未带版本段时先做与对话链路一致的归一探测（/v1 vs 裸域）。"""
+    base_in = p.base_url.strip().rstrip("/")
+    if not base_in:
         raise HTTPException(400, "Base URL 未填写")
+    conf = {"base_url": base_in, "api_key": p.api_key}
+    base = await analysis.resolve_base(conf)  # 复用归一：探测 /models JSON 胜出即回写
     headers = _llm_headers(p.api_key)
     url = f"{base}/chat/completions"
     payload = {"model": p.model.strip() or "gpt-4o-mini",

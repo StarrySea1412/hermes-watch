@@ -233,7 +233,7 @@ async def tick():
         await _notify_broadcast("tick", "巡检心跳", {})
 
 
-def _maybe_autoreport():
+async def _maybe_autoreport():
     """Generate a fleet report every N minutes when auto_report_min > 0."""
     minutes = _setting_int("auto_report_min", 0)
     if minutes <= 0:
@@ -248,8 +248,12 @@ def _maybe_autoreport():
                 db.j({"report_id": r["id"]})))
     print(f"[report] auto report #{r['id']} overall={r['overall']}")
     if _notify_broadcast:
-        asyncio.ensure_future(_notify_broadcast(
+        _spawn(_notify_broadcast(
             "report", f"定时健康报告已生成（整体 {r['overall']} 分）", {"report_id": r["id"]}))
+    try:
+        await reports.attach_ai_summary(r["id"])
+    except Exception:
+        traceback.print_exc()
 
 
 def _maybe_retention():
@@ -272,7 +276,7 @@ async def loop():
             await asyncio.sleep(15)
         try:
             await collect_all()
-            _maybe_autoreport()
+            await _maybe_autoreport()
             _maybe_retention()
         except Exception:
             traceback.print_exc()  # 调度循环的 bug 绝不静默

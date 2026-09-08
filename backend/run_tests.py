@@ -282,10 +282,18 @@ def t_anonymize():
 
 def t_chat_stream_fallback():
     print("[chat-stream]")
-    async def _run():
-        chunks = [c async for c in analysis.chat_stream("现在整体情况？", [])]
-        return chunks
-    chunks = asyncio.run(_run())
+    # 现场免疫：测试需要「AI 关」状态，备份现场值，测完还原（测试库可能与运行面板共用）
+    prev = db.query_one("SELECT value FROM settings WHERE key='ai_outbound'")
+    db.execute("INSERT INTO settings(key,value) VALUES('ai_outbound','off') "
+               "ON CONFLICT(key) DO UPDATE SET value='off'")
+    try:
+        async def _run():
+            chunks = [c async for c in analysis.chat_stream("现在整体情况？", [])]
+            return chunks
+        chunks = asyncio.run(_run())
+    finally:
+        if prev:
+            db.execute("UPDATE settings SET value=? WHERE key='ai_outbound'", (prev["value"],))
     check("AI 关闭 → meta(rules)", chunks[0]["type"] == "meta" and chunks[0]["source"] == "rules")
     check("有正文 delta", any(c["type"] == "delta" and c.get("text") for c in chunks))
     check("以 done 结束", chunks[-1]["type"] == "done")

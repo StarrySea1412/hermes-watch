@@ -8,6 +8,8 @@ import html
 import statistics
 import time
 
+import httpx
+
 from . import db, rules
 
 SEV_COLOR = {"crit": "#ef4444", "warn": "#f59e0b", "info": "#3b82f6"}
@@ -314,6 +316,7 @@ def generate(kind: str = "manual") -> dict:
     <h2 class="serif"><span class="no">05</span>处置建议汇总</h2>
     <div class="card"><ul>{reco_html or '<li class="allok">✓ 暂无需要建议处置的事项</li>'}</ul></div>
 
+    <!--AI_SECTION-->
     <footer>
       <div>本报告由 Hermes Watch 本地规则引擎基于巡检采集数据自动生成，<br>
       结论可回跳诊断中心查看证据链，全程数据不出本机。<br>
@@ -327,6 +330,72 @@ def generate(kind: str = "manual") -> dict:
     db.execute("INSERT INTO events(ts,host_id,kind,message,data) VALUES(?,NULL,'report',?,?)",
                (gen_ts, f"生成健康报告（{kind_label}），整体健康分 {overall}", db.j({"report_id": rid})))
     return {"id": rid, **data}
+
+
+def _ai_context() -> str:
+    """给报告 AI 摘要的数据底稿（与报告同源的规则引擎事实）。"""
+    hosts = db.query("SELECT * FROM hosts ORDER BY id")
+    lines = []
+    for h in hosts:
+        fs = db.query(
+            "SELECT severity, title FROM findings WHERE host_id=? AND status IN ('open','analyzed')",
+            (h["id"],))
+        m = db.query_one(
+            "SELECT cpu, mem, disk FROM metrics WHERE host_id=? ORDER BY ts DESC LIMIT 1", (h["id"],))
+        score = rules.health_score(fs)
+        lines.append(f"- {h['name']}: 健康分 {score}, CPU {m['cpu'] if m else 0:.0f}%, "
+                     f"内存 {m['mem'] if m else 0:.0f}%, 磁盘 {m['disk'] if m else 0:.0f}%, "
+                     + (f"未处理发现: {'; '.join(f['title'] for f in fs)}" if fs else "无未处理发现"))
+    return "\n".join(lines)
+
+
+async def attach_ai_summary(rid: int) -> dict:
+    """给已生成的报告补 AI 摘要（若 AI 外发开启且端点可用）。
+    AI 只写叙事、绝不改分数与结论；失败在报告里留痕，不阻塞报告本身。"""
+    row = db.query_one("SELECT * FROM reports WHERE id=?", (rid,))
+    if not row or "<!--AI_SECTION-->" not in (row["content_html"] or ""):
+        return {"ai": False}
+    data = db.uj(row["data"], {}) or {}
+
+    from . import analysis
+    conf = dict(analysis._ai_conf())
+    if not (analysis._llm_enabled() and conf.get("base_url")):
+        return {"ai": False}  # 未开启：报告保持纯规则引擎版本
+
+    conf["base_url"] = await analysis.resolve_base(conf)
+    prompt = (f"以下是服务器巡检报告的数据底稿（来自确定性规则引擎，整体健康分 {data.get('overall')}）：\n"
+              f"{_ai_context()}\n\n"
+              "请用不超过 6 句中文写一段报告摘要：1) 整体健康判断；2) 最需要关注的主机与风险；"
+              "3) 建议的处置顺序。只基于以上数据，不要编造，不要给分数以外的评价。")
+    try:
+        async with httpx.AsyncClient(timeout=40) as cli:
+            headers = {"Authorization": f"Bearer {conf['api_key']}"} if conf.get("api_key") else {}
+            r = await cli.post(conf["base_url"].rstrip("/") + "/chat/completions",
+                               headers=headers,
+                               json={"model": conf.get("model", "gpt-4o-mini"),
+                                     "messages": [{"role": "user", "content": prompt}],
+                                     "max_tokens": 400})
+            text = (r.json()["choices"][0]["message"]["content"] or "").strip()
+            model = conf.get("model", "")
+    except Exception as e:
+        text, model = "", ""
+        err = f"{type(e).__name__}: {e}"[:160]
+    else:
+        err = ""
+
+    if text:
+        ai_html = (f'<h2 class="serif"><span class="no">06</span>AI 摘要</h2>'
+                   f'<div class="card"><p style="margin:2px 0;line-height:1.9">{html.escape(text)}</p>'
+                   f'<p style="margin:10px 0 0;color:var(--mute);font-size:11px">'
+                   f'AI 叙事 · 由 {html.escape(model or "LLM")} 生成，仅供参考，一切以规则引擎结论与证据链为准</p></div>')
+    else:
+        ai_html = (f'<h2 class="serif"><span class="no">06</span>AI 摘要</h2>'
+                   f'<div class="card"><p style="margin:0;color:var(--mute)">AI 摘要生成失败（{html.escape(err)}）'
+                   f'——本报告的规则引擎结论不受影响。</p></div>')
+    data.update({"ai_summary": text or None, "ai_model": model or None, "ai_error": err or None})
+    db.execute("UPDATE reports SET data=?, content_html=? WHERE id=?",
+               (db.j(data), row["content_html"].replace("<!--AI_SECTION-->", ai_html), rid))
+    return {"ai": bool(text), "error": err or None}
 
 
 def list_reports(limit=20):

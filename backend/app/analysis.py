@@ -196,7 +196,8 @@ async def chat_answer(question: str, history: list[dict] | None = None) -> dict:
     history = 前端带来的多轮对话（[{role:'user'|'assistant', content}...]），最多取最近 10 条。
     脱敏开关开启时，快照与提问出站前都做 anonymize，回答再映射回真实名。"""
     mapping: dict[str, str] = {}
-    conf = _ai_conf()
+    conf = dict(_ai_conf())
+    conf["base_url"] = await resolve_base(conf)
     if _llm_enabled() and conf.get("base_url"):
         msgs = [{"role": "system", "content": (
             "你是服务器巡检平台 Hermes Watch 的助手。以下是当前 fleet 快照，"
@@ -221,8 +222,9 @@ async def chat_answer(question: str, history: list[dict] | None = None) -> dict:
                     answer = answer.replace(v, k)
                 return {"answer": answer, "grounded": True, "source": "llm"}
         except Exception as e:
+            _chat_base_cache.pop(conf.get("base_url") or "", None)  # 失败即失效缓存，下轮重新归一
             return {"answer": f"LLM 调用失败（{type(e).__name__}），以下是本地规则引擎的确定性回答：\n\n"
-                              + _fallback_answer(question),
+                              + _fallback_answer(question, ai_note=False),
                     "grounded": True, "source": "fallback"}
     return {"answer": _fallback_answer(question), "grounded": True, "source": "rules"}
 
@@ -231,7 +233,8 @@ async def chat_stream(question: str, history: list[dict] | None = None):
     """流式对话：LLM 开启且配置了 base_url 时逐 token 产出（脱敏在出站前完成）；
     否则一次性产出本地规则引擎摘要。yield 事件 dict：
     {"type":"meta","source":...} → {"type":"delta","text":...}* → {"type":"done"}"""
-    conf = _ai_conf()
+    conf = dict(_ai_conf())
+    conf["base_url"] = await resolve_base(conf)
     mapping: dict[str, str] = {}
     if _llm_enabled() and conf.get("base_url"):
         yield {"type": "meta", "source": "llm"}
@@ -268,7 +271,7 @@ async def chat_stream(question: str, history: list[dict] | None = None):
             yield {"type": "done"}
         except Exception as e:
             text = f"\n\n（LLM 流式调用失败：{type(e).__name__}，以下为本地规则引擎回答）\n\n" \
-                   + _fallback_answer(question)
+                   + _fallback_answer(question, ai_note=False)
             yield {"type": "delta", "text": text}
             yield {"type": "done"}
         return
@@ -277,10 +280,11 @@ async def chat_stream(question: str, history: list[dict] | None = None):
     yield {"type": "done"}
 
 
-def _fallback_answer(question: str) -> str:
+def _fallback_answer(question: str, ai_note: bool = True) -> str:
     snap = fleet_snapshot()
     worst = sorted(snap["hosts"], key=lambda h: h["score"])[:3]
-    lines = ["（AI 外发未开启，以下为本地规则引擎摘要。可在 设置 → AI 外发总开关 开启 LLM 叙事）", ""]
+    lines = (["（AI 外发未开启，以下为本地规则引擎摘要。可在 设置 → AI 外发总开关 开启 LLM 叙事）", ""]
+             if ai_note else ["（以下为本地规则引擎摘要——AI 调用失败时的兜底，规则结论不受影响）", ""])
     lines.append(f"Fleet 整体情况：{len(snap['hosts'])} 台主机。")
     for h in worst:
         if h["open_findings"]:
@@ -297,7 +301,8 @@ async def _llm_narrate(host: dict, finding: dict, evidence_text: str) -> tuple[s
     """LLM 叙事：只基于证据输出。API Key 可空（Ollama 等本地端点无需鉴权）。
     脱敏开启时，提示词中的主机名/IP 出站前替换为占位符，回答再映射回真实名。
     返回 (叙事文本, 模型名)；失败抛异常由调用方留痕，绝不影响规则引擎结论。"""
-    conf = _ai_conf()
+    conf = dict(_ai_conf())
+    conf["base_url"] = await resolve_base(conf)
     if not conf.get("base_url"):
         raise RuntimeError("未配置 Base URL")
     model = conf.get("model", "gpt-4o-mini")
@@ -326,6 +331,49 @@ def _mock_evidence_for(finding: dict) -> list[dict]:
                            "login": "审计登录记录", "service": "查看失败详情"}.get(t, "排查"),
                  "command": cmd, "output": out}]
     return []
+
+
+# ---- OpenAI 兼容端点的 base 归一：cc-switch 导入的 claude 类端点常不带 /v1 ----
+# 未带版本段时先探测 {base}/v1/models 是否为 JSON，胜出则自动回写设置（一次性，之后零开销）
+_chat_base_cache: dict[str, str] = {}
+
+
+def base_candidates(base_url: str) -> list[str]:
+    b = (base_url or "").rstrip("/")
+    if re.search(r"/v\d+$", b):
+        return [b]
+    return [b + "/v1", b]  # OpenAI 惯例优先，其次裸域（自带路径的网关）
+
+
+async def resolve_base(conf: dict) -> str:
+    """返回实际可用的 base：带版本段直接用；否则探测一次 /models（JSON=端点，HTML=网关页）。
+    探测成功且与原配置不同 → 回写 settings 并广播，UI 可见自动修正。"""
+    base = (conf.get("base_url") or "").rstrip("/")
+    if not base:
+        return base
+    if base in _chat_base_cache:
+        return _chat_base_cache[base]
+    cands = base_candidates(base)
+    if len(cands) == 1:
+        _chat_base_cache[base] = cands[0]
+        return cands[0]
+    headers = {"Authorization": f"Bearer {conf.get('api_key', '')}"} if conf.get("api_key") else {}
+    async with httpx.AsyncClient(timeout=8) as cli:
+        for c in cands:
+            try:
+                r = await cli.get(c + "/models", headers=headers)
+                ct = r.headers.get("content-type") or ""
+                if r.status_code == 200 and "json" in ct:
+                    _chat_base_cache[base] = c
+                    if c != base:
+                        db.execute("INSERT INTO settings(key,value) VALUES('ai_provider',?) "
+                                   "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                                   (db.j({**conf, "base_url": c}),))
+                    return c
+            except Exception:
+                continue
+    _chat_base_cache[base] = cands[-1]  # 探测不出就按原样（有的网关不开 /models 但 chat 可用）
+    return cands[-1]
 
 
 async def analyze_finding(host: dict, finding: dict) -> dict:
