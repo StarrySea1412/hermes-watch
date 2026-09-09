@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { api, fmtNet, fmtTime, SEV, type Finding } from '../api'
 import { PageHead } from '../ui'
+import { Ic } from '../icons'
 import { HealthRing, LineChart } from '../charts'
 import { useChartPalette } from '../theme'
 
@@ -62,7 +63,7 @@ export default function HostDetail() {
         <div className="text-3xl mb-3">📡</div>
         <div className="text-[13px] text-[var(--text-mute)] mb-1">主机数据加载失败</div>
         <div className="text-[11.5px] text-[var(--text-faint)] mono mb-4">{err}</div>
-        <button className="btn btn-primary" onClick={reload}>↻ 重试</button>
+        <button className="btn btn-primary" onClick={reload}><Ic name="refresh" size={13} /> 重试</button>
         <div className="text-[11px] text-[var(--text-faint)] mt-4">后端可能正在重启，或主机不可达；稍候重试即可</div>
       </div>
     </div>

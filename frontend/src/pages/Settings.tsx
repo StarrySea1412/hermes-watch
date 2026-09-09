@@ -370,10 +370,12 @@ export default function Settings() {
             <Ic name="download" size={13} /> 从 cc-switch 导入
           </button>
           <button className="btn" disabled={fetching || !provider.base_url} onClick={fetchModels}>
-            {fetching ? '拉取中…' : models.length ? '↻ 重新拉取模型' : '⌄ 获取模型列表'}
+            {fetching
+              ? <>拉取中…</>
+              : <><Ic name={models.length ? 'refresh' : 'chevron-down'} size={13} /> {models.length ? '重新拉取模型' : '获取模型列表'}</>}
           </button>
           <button className="btn" disabled={testing || !provider.base_url} onClick={testLlm}>
-            {testing ? '测试中…' : '⚡ 连通测活'}
+            {testing ? '测试中…' : <><Ic name="zap" size={13} /> 连通测活</>}
           </button>
           <button className="btn" style={settings.ai_anonymize === 'on'
             ? { background: 'var(--ok-bg)', color: 'var(--ok)', borderColor: 'var(--ok-border)' }
@@ -428,7 +430,7 @@ export default function Settings() {
               <div className="flex gap-2.5">
                 <a className="btn shrink-0" href={`/status/${statusTok}`} target="_blank" rel="noreferrer">预览 ↗</a>
                 <button className="btn btn-ghost shrink-0" title="旧链接立即失效"
-                  onClick={() => api<{ token: string }>('/status/token', { method: 'POST' }).then(r => setStatusTok(r.token))}>↻ 换新链接</button>
+                  onClick={() => api<{ token: string }>('/status/token', { method: 'POST' }).then(r => setStatusTok(r.token))}><Ic name="refresh" size={12} /> 换新链接</button>
                 <button className="btn btn-ghost shrink-0" style={{ color: 'var(--crit)' }}
                   onClick={() => api('/status/token', { method: 'DELETE' }).then(() => setStatusTok(''))}>关闭并撤销</button>
               </div>
@@ -538,7 +540,7 @@ export default function Settings() {
       <div className="card p-5 mt-4">
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-semibold text-[14.5px] text-[var(--text-hi)]">主机清单</h3>
-          <a href="/enroll" className="text-[12px] text-[var(--accent)] hover:underline">⌁ 出站 Agent 接入 →</a>
+          <a href="/enroll" className="text-[12px] text-[var(--accent)] hover:underline inline-flex items-center gap-1"><Ic name="zap" size={12} /> 出站 Agent 接入 →</a>
         </div>
         <div className="mt-4 overflow-x-auto">
           <table className="w-full text-[13px]">
