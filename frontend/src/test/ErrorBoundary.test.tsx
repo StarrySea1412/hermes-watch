@@ -1,8 +1,9 @@
+import React from "react"
 import { describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { ErrorBoundary } from '../ErrorBoundary'
 
-function Boom() {
+function Boom(): React.ReactElement {
   throw new Error('【测试】页面炸了')
 }
 
