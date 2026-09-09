@@ -1,8 +1,10 @@
 import { useState } from 'react'
 import { api } from '../api'
+import { useT } from '../i18n'
 
 /** 添加用户行内表单（设置 → 用户管理，admin 专用） */
 export function UserAdd({ onAdded }: { onAdded: () => void }) {
+  const { t } = useT()
   const [name, setName] = useState('')
   const [pw, setPw] = useState('')
   const [role, setRole] = useState('observer')
@@ -14,13 +16,13 @@ export function UserAdd({ onAdded }: { onAdded: () => void }) {
   }
   return (
     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 items-end">
-      <input className="input" placeholder="用户名（≥2 位）" value={name} onChange={e => setName(e.target.value)} />
-      <input className="input" type="password" placeholder="口令（≥4 位）" value={pw} onChange={e => setPw(e.target.value)} />
+      <input className="input" placeholder={t('user.namePh')} value={name} onChange={e => setName(e.target.value)} />
+      <input className="input" type="password" placeholder={t('user.pwPh')} value={pw} onChange={e => setPw(e.target.value)} />
       <select className="input" value={role} onChange={e => setRole(e.target.value)}>
-        <option value="observer">observer（只读）</option>
-        <option value="admin">admin（可写）</option>
+        <option value="observer">{t('user.roleObserver')}</option>
+        <option value="admin">{t('user.roleAdmin')}</option>
       </select>
-      <button className="btn btn-primary justify-center" disabled={!name || !pw} onClick={add}>＋ 添加用户</button>
+      <button className="btn btn-primary justify-center" disabled={!name || !pw} onClick={add}>{t('user.add')}</button>
       {msg && <div className="col-span-4 text-[11.5px]" style={{ color: 'var(--crit)' }}>✕ {msg}</div>}
     </div>
   )

@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { api } from './api'
+import { useT } from './i18n'
 import { Layout } from './ui'
 import { ErrorBoundary } from './ErrorBoundary'
 import Login from './pages/Login'
@@ -18,9 +19,10 @@ const Enroll = lazy(() => import('./pages/Enroll'))
 const Settings = lazy(() => import('./pages/Settings'))
 
 function PageFallback() {
+  const { t } = useT()
   return (
     <div className="h-full flex items-center justify-center text-[var(--text-faint)] text-[13px]">
-      <span className="pulse-dot" style={{ background: 'var(--accent)' }} /> 加载中…
+      <span className="pulse-dot" style={{ background: 'var(--accent)' }} /> {t('ui.loading')}
     </div>
   )
 }

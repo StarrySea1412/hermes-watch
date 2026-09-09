@@ -5,26 +5,34 @@ the "agent 巡检" core and works with zero LLM.
 Layer 2 (optional): LLM narration via an OpenAI-compatible endpoint. The AI
 outbound switch defaults to OFF (Termix-style gating from the research).
 可选脱敏（k8sgpt 式 anonymize）：主机名/IP 在出站前替换为占位符。
+
+i18n 决策：诊断卡（findings.card）是 JSON 整体存取，读出口逐字段翻译复杂，
+故 card 内的 root_cause/chain/置信度/步骤标签等文案在生成处直接用 i18n.t()
+双语化——存库语言跟随生成时的面板语言。这与 reports.py「报告生成时即用
+当时语言」的先例一致，mock 演示数据本就是演示用途（见 app/i18n.py 模块注释）。
 """
 import json
 import re
 
 import httpx
 
-from . import db, rules
+from . import db, i18n, rules
 
 DISK_PROBE = ("du -xh /var /opt /home --max-depth=2 2>/dev/null | sort -rh | head -8;"
               " journalctl --disk-usage 2>/dev/null")
 MEM_PROBE = "ps aux --sort=-%mem | head -8"
 LOGIN_PROBE = "last -n 20 -w; lastb -n 10 2>/dev/null | head -10"
 
+# 深挖步骤：label 为 (zh, en) 双语对（命令不翻译）
 DEEP_DIVE = {
-    "disk": [("定位大文件目录", DISK_PROBE)],
-    "memory": [("定位高内存进程", MEM_PROBE)],
-    "login": [("审计登录记录", LOGIN_PROBE)],
-    "service": [("查看失败详情", "systemctl status {service} --no-pager -l | head -20")],
+    "disk": [("定位大文件目录", "Locate large-file directories"), DISK_PROBE],
+    "memory": [("定位高内存进程", "Locate top-memory processes"), MEM_PROBE],
+    "login": [("审计登录记录", "Audit login records"), LOGIN_PROBE],
+    "service": [("查看失败详情", "Inspect failure details"),
+                "systemctl status {service} --no-pager -l | head -20"],
 }
 
+# 修复提案：命令不翻译，title/reason 双语（en 表与 zh 表结构对齐，仿 reports.py 的 RECO/RECO_EN 先例）
 PROPOSALS = {
     "disk": ("清理 journal 与过期日志", "journalctl --vacuum-size=500M && find /var/log -name '*.gz' -mtime +7 -delete",
              "回收 journal 空间并删除 7 天前的压缩日志，不影响在线服务"),
@@ -34,8 +42,18 @@ PROPOSALS = {
               "该 IP 为 Tor 出口节点特征段，先封禁再轮换 root 凭据"),
     "service": ("重启失败服务", "systemctl restart {service}", "恢复 failed unit"),
 }
+PROPOSALS_EN = {
+    "disk": ("Clean up journals and expired logs",
+             "journalctl --vacuum-size=500M && find /var/log -name '*.gz' -mtime +7 -delete",
+             "Reclaim journal space and delete compressed logs older than 7 days without touching live services"),
+    "memory": ("Restart the leaking process", "systemctl restart app-worker",
+               "Located worker process RSS at 91% — restart frees memory; confirm an off-peak window first"),
+    "login": ("Block source IP and rotate credentials", "ufw insert 1 deny 185.220.101.34 && passwd root",
+              "This IP matches a Tor exit-node range — block it first, then rotate root credentials"),
+    "service": ("Restart the failed service", "systemctl restart {service}", "Restore the failed unit"),
+}
 
-# ---- 演示主机专属叙事（编造文案只允许出现在 mock 主机上）----
+# ---- 演示主机专属叙事（编造文案只允许出现在 mock 主机上；zh/en 双表按面板语言取用）----
 MOCK_CHAIN = {
     "disk": ["磁盘使用率越过阈值", "写入压力主要来自日志目录", "日志由 app 服务持续输出未轮转"],
     "memory": ["内存使用率越过阈值", "单一进程 RSS 占比异常", "该进程随时间线性增长，符合泄漏特征"],
@@ -45,11 +63,30 @@ MOCK_CHAIN = {
     "cpu": ["CPU 持续高于阈值", "由进程级占用驱动"],
     "load": ["系统负载过高", "通常与 CPU/IO 排队相关"],
 }
+MOCK_CHAIN_EN = {
+    "disk": ["Disk usage crossed the threshold", "Write pressure mostly from the log directory",
+             "Logs written continuously by the app service without rotation"],
+    "memory": ["Memory usage crossed the threshold", "A single process has an abnormal RSS share",
+               "RSS grows linearly over time — consistent with a leak"],
+    "login": ["Login from an uncommon source", "Source IP has no prior history",
+              "No destructive commands so far — reconnaissance stage"],
+    "service": ["systemd reports a failed unit", "Process exited abnormally",
+                "Exit code points to a configuration/dependency issue"],
+    "cert": ["Certificate validity below the threshold", "Renew and redeploy required"],
+    "cpu": ["CPU persistently above the threshold", "Driven by process-level usage"],
+    "load": ["System load too high", "Usually related to CPU/IO queuing"],
+}
 MOCK_ROOT_CAUSE = {
     "disk": "/var/log 下应用日志未轮转，38G 日志持续增长吃满磁盘",
     "memory": "/opt/app/worker.py 存在内存泄漏，RSS 随运行时长线性上涨至 91%",
     "login": "来源 IP 185.220.101.34（非内网段）以 root 登录成功，疑似暴力破解得手或口令泄露",
     "service": "服务异常退出，退出码指向配置错误",
+}
+MOCK_ROOT_CAUSE_EN = {
+    "disk": "App logs under /var/log are never rotated — 38G of logs keep growing until the disk fills up",
+    "memory": "/opt/app/worker.py leaks memory; RSS grows linearly with uptime up to 91%",
+    "login": "Source IP 185.220.101.34 (non-intranet) logged in as root — likely a successful brute force or leaked credential",
+    "service": "Service exited abnormally; the exit code points to a configuration error",
 }
 
 # ---- 真实主机：只陈述规则事实，根因以深挖证据为准，绝不编造 ----
@@ -62,6 +99,36 @@ REAL_CHAIN = {
     "cpu": ["CPU 持续高于阈值（规则判定）", "ps 定位热点进程（见执行轨迹）"],
     "load": ["系统负载过高（规则判定）", "结合 CPU/IO 排队定位"],
 }
+REAL_CHAIN_EN = {
+    "disk": ["Disk usage crossed the threshold (rule verdict)",
+             "Deep-dive command returned real output (see execution trace)",
+             "Confirm the top consumer from the output, then remediate"],
+    "memory": ["Memory usage crossed the threshold (rule verdict)",
+               "ps located the top-memory process (see execution trace)",
+               "Schedule an off-peak restart after confirming the leak"],
+    "login": ["Login from an uncommon source (rule verdict)",
+              "last audit returned the login records (see execution trace)",
+              "Verify authorization, then block the source / rotate credentials"],
+    "service": ["systemd reports a failed unit (rule verdict)", "status details in the execution trace",
+                "Fix per the exit reason, then restart"],
+    "cert": ["Certificate validity below the threshold (rule verdict)", "Renew and redeploy"],
+    "cpu": ["CPU persistently above the threshold (rule verdict)",
+            "ps locates the hot process (see execution trace)"],
+    "load": ["System load too high (rule verdict)", "Correlate with CPU/IO queuing"],
+}
+
+# ---- 历史中文诊断卡的反查表（i18n.tr_card 在 EN 面板下读出口调用） ----
+# mock 与 real 是两套文案（real 带「规则判定」后缀），都要进反查表
+_CHAIN_ZH_TO_EN = {zh: en
+                   for zh_tab, en_tab in ((MOCK_CHAIN, MOCK_CHAIN_EN), (REAL_CHAIN, REAL_CHAIN_EN))
+                   for kind in set(zh_tab) & set(en_tab)
+                   for zh, en in zip(zh_tab[kind], en_tab[kind])}
+_ROOT_CAUSE_ZH_TO_EN = {zh: en for zh, en in zip(MOCK_ROOT_CAUSE.values(), MOCK_ROOT_CAUSE_EN.values())}
+
+
+def tr_card(card: dict | None) -> dict | None:
+    """i18n.tr_card 的封装：把本模块的反查表传过去，页面层只管调用。"""
+    return i18n.tr_card(card, chain_map=_CHAIN_ZH_TO_EN, root_map=_ROOT_CAUSE_ZH_TO_EN)
 
 
 def _rule_root_cause(finding: dict) -> str:
@@ -69,38 +136,55 @@ def _rule_root_cause(finding: dict) -> str:
     ev = db.uj(finding["evidence"], {}) or {}
     t = finding["type"]
     if t == "disk":
-        return f"磁盘使用率 {ev.get('disk', 0):.0f}% 越过阈值，主要占用来源以深挖输出为准"
+        return i18n.t(f"磁盘使用率 {ev.get('disk', 0):.0f}% 越过阈值，主要占用来源以深挖输出为准",
+                      f"Disk usage {ev.get('disk', 0):.0f}% crossed the threshold — "
+                      f"the top consumer is per the deep-dive output")
     if t == "memory":
-        return f"内存使用率 {ev.get('mem', 0):.0f}% 越过阈值，占用大头以深挖输出为准"
+        return i18n.t(f"内存使用率 {ev.get('mem', 0):.0f}% 越过阈值，占用大头以深挖输出为准",
+                      f"Memory usage {ev.get('mem', 0):.0f}% crossed the threshold — "
+                      f"the top consumer is per the deep-dive output")
     if t == "cpu":
-        return f"CPU 使用率 {ev.get('cpu', 0):.0f}% 越过阈值，热点进程以深挖输出为准"
+        return i18n.t(f"CPU 使用率 {ev.get('cpu', 0):.0f}% 越过阈值，热点进程以深挖输出为准",
+                      f"CPU usage {ev.get('cpu', 0):.0f}% crossed the threshold — "
+                      f"the hot process is per the deep-dive output")
     if t == "load":
-        return f"load1 {ev.get('load1', 0):.1f} 越过阈值，通常与 CPU/IO 排队相关"
+        return i18n.t(f"load1 {ev.get('load1', 0):.1f} 越过阈值，通常与 CPU/IO 排队相关",
+                      f"load1 {ev.get('load1', 0):.1f} crossed the threshold — usually related to CPU/IO queuing")
     if t == "login":
-        return f"来源 IP {ev.get('ip', '?')} 以用户 {ev.get('user', '?')} 登录成功，不在常见内网段"
+        return i18n.t(f"来源 IP {ev.get('ip', '?')} 以用户 {ev.get('user', '?')} 登录成功，不在常见内网段",
+                      f"Source IP {ev.get('ip', '?')} logged in as user {ev.get('user', '?')} — "
+                      f"not a common intranet segment")
     if t == "service":
-        return f"systemd 报告 unit {ev.get('service', '?')} 处于 failed 状态"
+        return i18n.t(f"systemd 报告 unit {ev.get('service', '?')} 处于 failed 状态",
+                      f"systemd reports unit {ev.get('service', '?')} in failed state")
     if t == "cert":
-        return f"证书剩余 {ev.get('days', '?')} 天，低于告警阈值"
-    return "规则引擎确认指标越限，证据见执行轨迹"
+        return i18n.t(f"证书剩余 {ev.get('days', '?')} 天，低于告警阈值",
+                      f"Certificate has {ev.get('days', '?')} days left — below the alert threshold")
+    return i18n.t("规则引擎确认指标越限，证据见执行轨迹",
+                  "Rule engine confirmed the metric breach — evidence in the execution trace")
 
 
 def _proposal_for(host: dict, finding: dict) -> tuple[str, str, str] | None:
     """按主机类型与真实证据生成修复提案。真实主机只提有安全依据的命令：
-    提案是要被执行的，命令里的 IP/服务名必须来自这台机器的证据，而不是演示剧本。"""
+    提案是要被执行的，命令里的 IP/服务名必须来自这台机器的证据，而不是演示剧本。
+    命令不翻译；title/rationale 按面板语言取双语。"""
     t = finding["type"]
     if host.get("mock"):
-        return PROPOSALS.get(t)
+        return PROPOSALS.get(t) if i18n.lang() != "en" else PROPOSALS_EN.get(t)
     ev = db.uj(finding["evidence"], {}) or {}
     if t == "disk":
-        return PROPOSALS["disk"]  # journal 清理对所有 Linux 机器安全且通用
+        return PROPOSALS["disk"] if i18n.lang() != "en" else PROPOSALS_EN["disk"]  # journal 清理对所有 Linux 机器安全且通用
     if t == "service":
         svc = ev.get("service")
-        return (f"重启失败服务 {svc}", f"systemctl restart {svc}", "恢复 failed unit") if svc else None
+        return (i18n.t(f"重启失败服务 {svc}", f"Restart failed service {svc}"),
+                f"systemctl restart {svc}",
+                i18n.t("恢复 failed unit", "Restore the failed unit")) if svc else None
     if t == "login":
         ip = ev.get("ip")
-        return (f"封禁来源 IP {ip} 并改密", f"ufw insert 1 deny {ip} && passwd root",
-                "先封禁可疑来源，再轮换 root 凭据") if ip else None
+        return (i18n.t(f"封禁来源 IP {ip} 并改密", f"Block source IP {ip} and rotate credentials"),
+                f"ufw insert 1 deny {ip} && passwd root",
+                i18n.t("先封禁可疑来源，再轮换 root 凭据",
+                       "Block the suspicious source first, then rotate root credentials")) if ip else None
     # memory/cpu/load/cert：真实主机上没有可安全白名单执行的一键命令，宁可不给提案
     return None
 
@@ -142,14 +226,14 @@ def anonymize(text: str, mapping: dict[str, str]) -> str:
     单趟正则替换：占位符本身形似 IP，但 re.sub 不回扫已替换文本，杜绝二次脱敏。"""
     for h in db.query("SELECT id, name, hostname FROM hosts"):
         if h["name"]:
-            mapping.setdefault(h["name"], f"主机-{h['id']}")
+            mapping.setdefault(h["name"], i18n.t(f"主机-{h['id']}", f"Host-{h['id']}"))
         addr = h["hostname"] or ""
         if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", addr):
             mapping.setdefault(addr, f"10.9.0.{h['id'] % 250 + 1}")
         elif addr:
             mapping.setdefault(addr, f"srv-{h['id']}.local")
-    mapping.setdefault("root", "用户-A")
-    mapping.setdefault("admin", "用户-B")
+    mapping.setdefault("root", i18n.t("用户-A", "User-A"))
+    mapping.setdefault("admin", i18n.t("用户-B", "User-B"))
 
     def _sub(m: re.Match) -> str:
         s = m.group(0)
@@ -327,8 +411,11 @@ def _mock_evidence_for(finding: dict) -> list[dict]:
     t = finding["type"]
     if t in MOCK_EVIDENCE:
         cmd, out = MOCK_EVIDENCE[t]
-        return [{"label": {"disk": "定位大文件目录", "memory": "定位高内存进程",
-                           "login": "审计登录记录", "service": "查看失败详情"}.get(t, "排查"),
+        # 命令输出保持终端原样不翻译；仅 label 双语
+        return [{"label": i18n.t({"disk": "定位大文件目录", "memory": "定位高内存进程",
+                                  "login": "审计登录记录", "service": "查看失败详情"}.get(t, "排查"),
+                                 {"disk": "Locate large-file directories", "memory": "Locate top-memory processes",
+                                  "login": "Audit login records", "service": "Inspect failure details"}.get(t, "Investigate")),
                  "command": cmd, "output": out}]
     return []
 
@@ -384,20 +471,27 @@ async def analyze_finding(host: dict, finding: dict) -> dict:
     elif finding["type"] in DEEP_DIVE:
         from . import collector
         svc = (db.uj(finding["evidence"], {}) or {}).get("service", "")
-        label, cmd = DEEP_DIVE[finding["type"]][0]
+        label = i18n.t(*DEEP_DIVE[finding["type"]][0])
+        cmd = DEEP_DIVE[finding["type"]][1]
         real_cmd = cmd.format(service=svc or "nginx")
         try:
             # 真实执行深挖命令拿真实输出（只读探针），不再是 extras 的 dict 转储
             out = (await collector.run_cmd(host, real_cmd)).strip()
             steps.append({"label": label, "command": real_cmd,
-                          "output": out[:800] or "（命令执行成功，无输出）"})
+                          "output": out[:800] or i18n.t("（命令执行成功，无输出）",
+                                                        "(command succeeded, no output)")})
         except Exception as e:
             steps.append({"label": label, "command": real_cmd,
                           "output": f"执行失败：{type(e).__name__}: {e}"})
 
     is_mock = host.get("mock")
-    chain = (MOCK_CHAIN if is_mock else REAL_CHAIN).get(finding["type"], ["指标越过阈值"])
-    confidence = "高" if steps else "中"
+    chain = (MOCK_CHAIN if is_mock else REAL_CHAIN).get(
+        finding["type"],
+        [i18n.t("指标越过阈值", "Metric crossed the threshold")])
+    if i18n.lang() == "en":
+        chain = (MOCK_CHAIN_EN if is_mock else REAL_CHAIN_EN).get(finding["type"],
+                                                                  chain)
+    confidence = i18n.t("高", "High") if steps else i18n.t("中", "Medium")
 
     proposal_id = None
     prop = _proposal_for(host, finding)
@@ -410,7 +504,11 @@ async def analyze_finding(host: dict, finding: dict) -> dict:
 
     # 规则引擎结论永远为准；AI 叙事仅作为附加视角单列，绝不覆盖 root_cause
     if is_mock:
-        root_cause = MOCK_ROOT_CAUSE.get(finding["type"], "规则引擎确认指标越限，证据见左侧执行轨迹")
+        root_cause = MOCK_ROOT_CAUSE.get(finding["type"],
+                                         i18n.t("规则引擎确认指标越限，证据见左侧执行轨迹",
+                                                "Rule engine confirmed the metric breach — evidence in the execution trace"))
+        if i18n.lang() == "en" and finding["type"] in MOCK_ROOT_CAUSE_EN:
+            root_cause = MOCK_ROOT_CAUSE_EN[finding["type"]]
     else:
         root_cause = _rule_root_cause(finding)
 
@@ -423,7 +521,9 @@ async def analyze_finding(host: dict, finding: dict) -> dict:
             ai_error = f"{type(e).__name__}: {e}"[:160]
             db.execute("INSERT INTO events(ts,host_id,kind,message,data) VALUES(?,?,?,?,?)",
                        (db.now(), host["id"], "ai_error",
-                        f"AI 叙事失败（诊断继续，规则结论不受影响）: {ai_error}", "{}"))
+                        i18n.t(f"AI 叙事失败（诊断继续，规则结论不受影响）: {ai_error}",
+                               f"AI narration failed (diagnosis continues, rule verdicts unaffected): {ai_error}"),
+                        "{}"))
 
     card = {
         "root_cause": root_cause,
@@ -439,7 +539,9 @@ async def analyze_finding(host: dict, finding: dict) -> dict:
                (db.j(card), finding["id"]))
     db.execute("INSERT INTO events(ts,host_id,kind,message,data) VALUES(?,?,?,?,?)",
                (db.now(), host["id"], "analysis",
-                f"agent 完成诊断: {finding['title']}", db.j({"finding_id": finding["id"]})))
+                i18n.t(f"agent 完成诊断: {finding['title']}",
+                       f"Agent diagnosis completed: {finding['title']}"),
+                db.j({"finding_id": finding["id"]})))
     return card
 
 

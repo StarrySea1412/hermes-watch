@@ -13,7 +13,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
-from . import agent, analysis, auth, ccswitch, db, executor, mcp_server, notify, ports, reports, rules, scheduler, seed, secrets, terminal
+from . import agent, analysis, auth, ccswitch, db, executor, i18n, mcp_server, notify, ports, reports, rules, scheduler, seed, secrets, terminal
 
 # 前端经 vite 代理（生产同源部署）访问 /api，浏览器永远同源 —— 不开 CORS 面
 
@@ -43,11 +43,13 @@ async def panel_auth_middleware(request: Request, call_next):
     if auth.enabled() and path.startswith("/api") and path not in AUTH_OPEN:
         role = auth.session_role(request.cookies.get(auth.COOKIE, ""))
         if not role:
-            return JSONResponse({"detail": "面板未登录"}, status_code=401)
+            return JSONResponse({"detail": i18n.t("面板未登录", "Panel not signed in")}, status_code=401)
         # observer 只读：拦写方法；登录后的自身口令修改走专用端点不受影响
         if role == "observer" and request.method not in ("GET", "HEAD", "OPTIONS") \
                 and not path.startswith("/api/auth/self"):
-            return JSONResponse({"detail": "观察者角色为只读，写操作需要管理员权限"}, status_code=403)
+            return JSONResponse({"detail": i18n.t("观察者角色为只读，写操作需要管理员权限",
+                                                  "Observer role is read-only — write operations require admin")},
+                                 status_code=403)
     return await call_next(request)
 
 _subs: set[asyncio.Queue] = set()
@@ -92,7 +94,8 @@ async def remove_demo_hosts():
         for table in ("metrics", "findings", "proposals", "events"):
             db.execute(f"DELETE FROM {table} WHERE host_id=?", (hid,))
         db.execute("DELETE FROM hosts WHERE id=?", (hid,))
-    await broadcast("host", f"已移除 {len(ids)} 台演示主机，切换到真实接入模式")
+    await broadcast("host", i18n.t(f"已移除 {len(ids)} 台演示主机，切换到真实接入模式",
+                                   f"Removed {len(ids)} demo hosts — switched to real-host mode"))
     return {"removed": len(ids)}
 
 
@@ -100,9 +103,10 @@ async def remove_demo_hosts():
 async def seed_demo_hosts_ep():
     """恢复演示引导（真实主机保留，演示机并列加入）。"""
     if db.query_one("SELECT id FROM hosts WHERE mock=1"):
-        raise HTTPException(400, "演示主机已存在")
+        raise HTTPException(400, i18n.t("演示主机已存在", "Demo hosts already exist"))
     n = seed.seed_demo_hosts()
-    await broadcast("host", f"已恢复 {n} 台演示引导主机")
+    await broadcast("host", i18n.t(f"已恢复 {n} 台演示引导主机",
+                                   f"Restored {n} demo bootstrap hosts"))
     return {"seeded": n}
 
 
@@ -118,23 +122,24 @@ class HostIn(BaseModel):
 @app.post("/api/hosts")
 async def add_host(h: HostIn):
     if db.query_one("SELECT id FROM hosts WHERE name=?", (h.name,)):
-        raise HTTPException(400, "同名主机已存在")
+        raise HTTPException(400, i18n.t("同名主机已存在", "A host with this name already exists"))
     hid = db.execute(
         "INSERT INTO hosts(name,hostname,port,username,secret,group_name,mock,created_at) "
         "VALUES(?,?,?,?,?,?,0,?)", (h.name, h.hostname, h.port, h.username,
                                     secrets.encrypt(h.secret), h.group_name, db.now()))
-    await broadcast("host", f"新增主机 {h.name}")
+    await broadcast("host", i18n.t(f"新增主机 {h.name}", f"Host added: {h.name}"))
     return {"id": hid}
 
 
 @app.delete("/api/hosts/{hid}")
 async def del_host(hid: int):
     if not db.query_one("SELECT id FROM hosts WHERE id=?", (hid,)):
-        raise HTTPException(404, "主机不存在")
+        raise HTTPException(404, i18n.t("主机不存在", "Host not found"))
     for table in ("metrics", "findings", "proposals", "events", "proposal_runs"):
         db.execute(f"DELETE FROM {table} WHERE host_id=?", (hid,))
     db.execute("DELETE FROM hosts WHERE id=?", (hid,))
-    await broadcast("host", f"已删除主机 #{hid} 及其全部巡检数据")
+    await broadcast("host", i18n.t(f"已删除主机 #{hid} 及其全部巡检数据",
+                                   f"Host #{hid} deleted along with all its inspection data"))
     return {"ok": True}
 
 
@@ -142,7 +147,7 @@ async def del_host(hid: int):
 def host_detail(hid: int, range_min: int = 240):
     h = db.query_one("SELECT * FROM hosts WHERE id=?", (hid,))
     if not h:
-        raise HTTPException(404, "主机不存在")
+        raise HTTPException(404, i18n.t("主机不存在", "Host not found"))
     metrics = db.query(
         "SELECT ts,cpu,mem,disk,net_in,net_out,load1 FROM metrics WHERE host_id=? AND ts>? ORDER BY ts",
         (hid, db.now() - range_min * 60))
@@ -150,7 +155,10 @@ def host_detail(hid: int, range_min: int = 240):
         "SELECT * FROM findings WHERE host_id=? AND status IN ('open','analyzed') ORDER BY ts DESC", (hid,))
     for f in findings:
         f["evidence"] = db.uj(f["evidence"], {})
-        f["card"] = db.uj(f["card"], None)
+        # 读出口兜底：历史中文行跟随面板语言（同 /api/findings，card 走 analysis.tr_card 反查）
+        f["title"] = i18n.tr_finding_title(f["title"])
+        f["detail"] = i18n.tr_finding_detail(f["detail"])
+        f["card"] = analysis.tr_card(db.uj(f["card"], None))
     extras = {}
     if h["mock"]:
         from .collector import mock_extras
@@ -172,7 +180,10 @@ def findings(status: str = "open,analyzed,resolved"):
         tuple(status.split(",")))
     for r in rows:
         r["evidence"] = db.uj(r["evidence"], {})
-        r["card"] = db.uj(r["card"], None)
+        # 读出口兜底：历史中文存库行按面板语言翻译（正则模板匹配，未命中保留原文）
+        r["card"] = analysis.tr_card(db.uj(r["card"], None))
+        r["title"] = i18n.tr_finding_title(r["title"])
+        r["detail"] = i18n.tr_finding_detail(r["detail"])
     return rows
 
 
@@ -180,13 +191,16 @@ def findings(status: str = "open,analyzed,resolved"):
 async def analyze(fid: int):
     f = db.query_one("SELECT * FROM findings WHERE id=?", (fid,))
     if not f:
-        raise HTTPException(404, "finding 不存在")
+        raise HTTPException(404, i18n.t("finding 不存在", "finding not found"))
     h = db.query_one("SELECT * FROM hosts WHERE id=?", (f["host_id"],))
     card = await analysis.analyze_finding(h, f)
-    await broadcast("analysis", f"agent 完成诊断: {f['title']}", {"finding_id": fid})
+    await broadcast("analysis", i18n.t(f"agent 完成诊断: {f['title']}",
+                                       f"Agent diagnosis completed: {f['title']}"),
+                    {"finding_id": fid})
     if f["severity"] == "crit":
-        asyncio.ensure_future(notify.send("诊断完成",
-                                          f"{h['name']}: {f['title']} → {card.get('root_cause', '')[:80]}"))
+        asyncio.ensure_future(notify.send(i18n.t("诊断完成", "Diagnosis completed"),
+                                          i18n.t(f"{h['name']}: {f['title']} → {card.get('root_cause', '')[:80]}",
+                                                 f"{h['name']}: {f['title']} → {card.get('root_cause', '')[:80]}")))
     return card
 
 
@@ -198,17 +212,21 @@ class Decision(BaseModel):
 async def decide(pid: int, d: Decision):
     p = db.query_one("SELECT * FROM proposals WHERE id=?", (pid,))
     if not p:
-        raise HTTPException(404, "proposal 不存在")
+        raise HTTPException(404, i18n.t("proposal 不存在", "proposal not found"))
     if p["status"] != "pending":
-        raise HTTPException(400, "该提案已处理")
+        raise HTTPException(400, i18n.t("该提案已处理", "This proposal was already decided"))
     if d.action not in ("approve", "reject"):
-        raise HTTPException(400, "action 必须是 approve/reject")
+        raise HTTPException(400, i18n.t("action 必须是 approve/reject",
+                                        "action must be approve or reject"))
     status = "approved" if d.action == "approve" else "rejected"
     db.execute("UPDATE proposals SET status=?, decided_at=? WHERE id=?", (status, db.now(), pid))
     # 注意：批准 ≠ 解决。发现保持 analyzed（列表可见），执行成功后才转 resolved
     h = db.query_one("SELECT hostname FROM hosts WHERE id=?", (p["host_id"],))
-    await broadcast("proposal", f"提案{'已批准' if status == 'approved' else '已拒绝'}: {p['title']}"
-                    + (f"（演示环境，命令未实际执行于 {h['hostname']}）" if h else ""),
+    verb = i18n.t("已批准", "approved") if status == "approved" else i18n.t("已拒绝", "rejected")
+    tail = (i18n.t(f"（演示环境，命令未实际执行于 {h['hostname']}）",
+                   f" (demo environment, command not executed on {h['hostname']})") if h else "")
+    await broadcast("proposal",
+                    i18n.t(f"提案{verb}: {p['title']}", f"Proposal {verb}: {p['title']}") + tail,
                     {"proposal_id": pid})
     return {"ok": True, "status": status}
 
@@ -222,6 +240,9 @@ def proposals():
     for r in rows:
         r["runs"] = runs.get(r["id"], [])
         r["exec_enabled"] = executor.exec_enabled()
+        # 读出口兜底：历史中文提案行跟随面板语言（command 是命令，不翻译）
+        r["title"] = i18n.tr_proposal_title(r["title"])
+        r["rationale"] = i18n.tr_proposal_rationale(r["rationale"])
     return rows
 
 
@@ -230,15 +251,19 @@ async def execute_proposal(pid: int):
     """批准之后的显式执行动作（与 decide 分离）：白名单校验 + 超时 + 全审计。"""
     p = db.query_one("SELECT * FROM proposals WHERE id=?", (pid,))
     if not p:
-        raise HTTPException(404, "proposal 不存在")
+        raise HTTPException(404, i18n.t("proposal 不存在", "proposal not found"))
     if p["status"] != "approved":
-        raise HTTPException(400, "只能执行已批准的提案")
+        raise HTTPException(400, i18n.t("只能执行已批准的提案", "Only approved proposals can be executed"))
     h = db.query_one("SELECT * FROM hosts WHERE id=?", (p["host_id"],))
     if not h:
-        raise HTTPException(404, "主机不存在")
+        raise HTTPException(404, i18n.t("主机不存在", "Host not found"))
     run = await executor.execute(p, dict(h))
-    await broadcast("exec", f"提案 #{pid} 执行{'' if run['status'] == 'ok' else '失败'}"
-                    f"（{run['status']}）: {p['title']}", {"proposal_id": pid, "run_id": run["id"]})
+    ok_exec = run["status"] == "ok"
+    await broadcast("exec",
+                    i18n.t(f"提案 #{pid} 执行{'' if ok_exec else '失败'}（{run['status']}）: {p['title']}",
+                           f"Proposal #{pid} executed{' failed' if not ok_exec else ''} "
+                           f"({run['status']}): {p['title']}"),
+                    {"proposal_id": pid, "run_id": run["id"]})
     if run["status"] == "ok" and p["finding_id"]:
         # 执行成功 → 发现真正解决
         db.execute("UPDATE findings SET status='resolved', resolved_at=? WHERE id=?",
@@ -259,19 +284,25 @@ def events(limit: int = 80):
         "ORDER BY e.ts DESC LIMIT ?", (limit,))
     for r in rows:
         r["data"] = db.uj(r["data"], {})
+        # 读出口兜底：历史中文事件行按面板语言翻译（嵌套标题一并处理）
+        r["message"] = i18n.tr_event_message(r["message"])
     return rows
 
 
 @app.post("/api/reports/generate")
 async def gen_report(kind: str = "manual"):
     r = reports.generate(kind)
-    await broadcast("report", f"健康报告已生成（整体 {r['overall']} 分）", r)
+    await broadcast("report", i18n.t(f"健康报告已生成（整体 {r['overall']} 分）",
+                                     f"Health report generated (overall score {r['overall']})"), r)
     # AI 摘要异步追加（AI 外发开启时）：报告立即可看，摘要稍后出现在第 06 节
     async def _ai():
         res = await reports.attach_ai_summary(r["id"])
         if res.get("ai") or res.get("error"):
-            await broadcast("report", f"报告 #{r['id']} AI 摘要已"
-                            f"{'生成' if res.get('ai') else '失败（规则结论不受影响）'}", {"report_id": r["id"]})
+            await broadcast("report",
+                            i18n.t(f"报告 #{r['id']} AI 摘要已{'生成' if res.get('ai') else '失败（规则结论不受影响）'}",
+                                   f"Report #{r['id']} AI summary "
+                                   f"{'generated' if res.get('ai') else 'failed (rule verdicts unaffected)'}"),
+                            {"report_id": r["id"]})
     asyncio.ensure_future(_ai())
     return r
 
@@ -292,7 +323,7 @@ def report_html(rid: int):
 @app.delete("/api/reports/{rid}")
 async def report_delete(rid: int):
     db.execute("DELETE FROM reports WHERE id=?", (rid,))
-    await broadcast("report", f"报告 #{rid} 已删除")
+    await broadcast("report", i18n.t(f"报告 #{rid} 已删除", f"Report #{rid} deleted"))
     return {"ok": True}
 
 
@@ -300,7 +331,8 @@ async def report_delete(rid: int):
 async def reports_clear():
     n = db.query_one("SELECT COUNT(*) AS n FROM reports")["n"]
     db.execute("DELETE FROM reports")
-    await broadcast("report", f"已一键清空全部报告（{n} 份）")
+    await broadcast("report", i18n.t(f"已一键清空全部报告（{n} 份）",
+                                     f"Cleared all reports ({n} in total)"))
     return {"ok": True, "removed": n}
 
 
@@ -319,7 +351,8 @@ async def set_settings(payload: dict):
         db.execute("INSERT INTO settings(key,value) VALUES(?,?) "
                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (k, str(v)))
         if k == "ai_outbound":
-            await broadcast("settings", f"AI 外发已{'开启' if str(v) == 'on' else '关闭'}")
+            await broadcast("settings", i18n.t(f"AI 外发已{'开启' if str(v) == 'on' else '关闭'}",
+                                               f"AI outbound {'enabled' if str(v) == 'on' else 'disabled'}"))
     return {"ok": True}
 
 
@@ -332,16 +365,24 @@ def notify_channels():
 
 @app.post("/api/notify/test")
 async def notify_test():
-    ok, err = await notify.send("测试", "这是一条 Hermes Watch 测试通知，收到即代表渠道配置生效")
+    ok, err = await notify.send(i18n.t("测试", "Test"),
+                                i18n.t("这是一条 Hermes Watch 测试通知，收到即代表渠道配置生效",
+                                       "This is a Hermes Watch test notification — receiving it means the channel works"))
     if not ok:
-        raise HTTPException(400, err or "发送失败")
-    await broadcast("settings", "通知渠道测试通过")
+        raise HTTPException(400, err or i18n.t("发送失败", "Send failed"))
+    await broadcast("settings", i18n.t("通知渠道测试通过", "Notification channel test passed"))
     return {"ok": True}
 
 
 @app.get("/api/notify/log")
 def notify_log(limit: int = 30):
     rows = db.query("SELECT * FROM notify_log ORDER BY ts DESC LIMIT ?", (limit,))
+    # 读出口兜底：历史中文 kind 与 text 中嵌套的发现标题跟随面板语言（同 /api/events）
+    for r in rows:
+        r["kind"] = i18n.tr_notify_kind(r["kind"])
+        r["text"] = i18n.tr_notify_text(r["text"])
+        if r.get("error"):
+            r["error"] = i18n.tr_notify_error(r["error"])
     return rows
 
 
@@ -378,10 +419,11 @@ def ccswitch_list():
 @app.post("/api/llm/ccswitch/apply")
 async def ccswitch_apply(p: dict):
     if not p.get("base_url"):
-        raise HTTPException(400, "base_url 不能为空")
+        raise HTTPException(400, i18n.t("base_url 不能为空", "base_url is required"))
     ccswitch.apply(p)
     name = p.get("name") or p["base_url"]
-    await broadcast("settings", f"已从 cc-switch 导入 LLM 配置: {name}")
+    await broadcast("settings", i18n.t(f"已从 cc-switch 导入 LLM 配置: {name}",
+                                       f"LLM config imported from cc-switch: {name}"))
     return {"ok": True}
 
 
@@ -423,7 +465,7 @@ def _llm_headers(api_key: str) -> dict:
 @app.post("/api/llm/models")
 async def llm_models(p: LlmProbeIn):
     """拉取 OpenAI 兼容模型列表：GET {base}/models，候选 URL 按序尝试，404/405 换下一个。"""
-    tried, models, last = [], [], "Base URL 未填写"
+    tried, models, last = [], [], i18n.t("Base URL 未填写", "Base URL is required")
     for url in _models_url_candidates(p.base_url)[:3]:
         tried.append(url)
         try:
@@ -449,7 +491,7 @@ async def llm_test(p: LlmProbeIn):
     base 未带版本段时先做与对话链路一致的归一探测（/v1 vs 裸域）。"""
     base_in = p.base_url.strip().rstrip("/")
     if not base_in:
-        raise HTTPException(400, "Base URL 未填写")
+        raise HTTPException(400, i18n.t("Base URL 未填写", "Base URL is required"))
     conf = {"base_url": base_in, "api_key": p.api_key}
     base = await analysis.resolve_base(conf)  # 复用归一：探测 /models JSON 胜出即回写
     headers = _llm_headers(p.api_key)
@@ -478,7 +520,7 @@ async def llm_test(p: LlmProbeIn):
                     "model": p.model.strip(), "reply": reply}
         except httpx.TimeoutException:
             return {"ok": False, "latency_ms": int((time.perf_counter() - t0) * 1000),
-                    "error": "请求超时（30s）"}
+                    "error": i18n.t("请求超时（30s）", "Request timed out (30s)")}
         except Exception as e:
             return {"ok": False, "latency_ms": int((time.perf_counter() - t0) * 1000),
                     "error": f"{type(e).__name__}: {e}"}
@@ -511,11 +553,12 @@ async def auth_status(request: Request):
 async def auth_login(p: LoginIn, request: Request):
     ip = request.client.host if request.client else "?"
     if auth.too_many_fails(ip):
-        raise HTTPException(429, "尝试过于频繁，请 1 分钟后再试")
+        raise HTTPException(429, i18n.t("尝试过于频繁，请 1 分钟后再试",
+                                        "Too many attempts — try again in 1 minute"))
     ok, role = auth.verify_login(p.username, p.password)
     if not ok:
         auth.record_fail(ip)
-        raise HTTPException(401, "口令错误")
+        raise HTTPException(401, i18n.t("口令错误", "Incorrect password"))
     resp = JSONResponse({"ok": True, "role": role})
     resp.set_cookie(auth.COOKIE, auth.make_session(role), max_age=auth.TTL,
                     httponly=True, samesite="lax", path="/")
@@ -538,7 +581,7 @@ def _require_admin(request: Request):
     if not auth.enabled():
         return  # 访问控制未开 = 单人本机模式，无需角色
     if auth.session_role(request.cookies.get(auth.COOKIE, "")) != "admin":
-        raise HTTPException(403, "需要管理员权限")
+        raise HTTPException(403, i18n.t("需要管理员权限", "Admin privileges required"))
 
 
 @app.get("/api/auth/users")
@@ -551,15 +594,16 @@ async def users_list(request: Request):
 async def users_add(u: UserIn, request: Request):
     _require_admin(request)
     if len(u.username.strip()) < 2:
-        raise HTTPException(400, "用户名至少 2 位")
+        raise HTTPException(400, i18n.t("用户名至少 2 位", "Username must be at least 2 characters"))
     if len(u.password) < 4:
-        raise HTTPException(400, "口令至少 4 位")
+        raise HTTPException(400, i18n.t("口令至少 4 位", "Password must be at least 4 characters"))
     try:
         uid = auth.add_user(u.username.strip(), u.password, u.role)
     except ValueError as e:
         raise HTTPException(400, str(e))
     auth.bump_session_epoch()
-    await broadcast("settings", f"已添加用户 {u.username}（{u.role}）")
+    await broadcast("settings", i18n.t(f"已添加用户 {u.username}（{u.role}）",
+                                       f"User added: {u.username} ({u.role})"))
     return {"ok": True, "id": uid}
 
 
@@ -570,7 +614,8 @@ async def users_set_role(uid: int, r: RoleIn, request: Request):
         auth.set_role(uid, r.role)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    await broadcast("settings", f"用户 #{uid} 角色已改为 {r.role}")
+    await broadcast("settings", i18n.t(f"用户 #{uid} 角色已改为 {r.role}",
+                                       f"Role of user #{uid} changed to {r.role}"))
     return {"ok": True}
 
 
@@ -580,11 +625,12 @@ async def users_del(uid: int, request: Request):
     n_admin = len([u for u in auth.list_users() if u["role"] == "admin"])
     row = db.query_one("SELECT username, role FROM users WHERE id=?", (uid,))
     if not row:
-        raise HTTPException(404, "用户不存在")
+        raise HTTPException(404, i18n.t("用户不存在", "User not found"))
     if row["role"] == "admin" and n_admin <= 1:
-        raise HTTPException(400, "至少保留一名管理员")
+        raise HTTPException(400, i18n.t("至少保留一名管理员", "At least one admin must remain"))
     auth.del_user(uid)
-    await broadcast("settings", f"已删除用户 {row['username']}")
+    await broadcast("settings", i18n.t(f"已删除用户 {row['username']}",
+                                       f"User deleted: {row['username']}"))
     return {"ok": True}
 
 
@@ -592,15 +638,16 @@ async def users_del(uid: int, request: Request):
 async def self_change_password(p: ChangePwIn, request: Request):
     """已登录用户改自己的口令（observer 也可用——中间件放行 /api/auth/self）。"""
     if not auth.enabled():
-        raise HTTPException(400, "访问控制未开启")
+        raise HTTPException(400, i18n.t("访问控制未开启", "Access control is not enabled"))
     username = request.headers.get("x-hw-user", "")
     row = db.query_one("SELECT id FROM users WHERE username=?", (username,))
     if not row or not auth.verify_login(username, p.old)[0]:
-        raise HTTPException(401, "旧口令错误")
+        raise HTTPException(401, i18n.t("旧口令错误", "Old password is incorrect"))
     if len(p.new) < 4:
-        raise HTTPException(400, "新口令至少 4 位")
+        raise HTTPException(400, i18n.t("新口令至少 4 位", "New password must be at least 4 characters"))
     auth.set_user_password(row["id"], p.new)
-    await broadcast("settings", f"用户 {username} 口令已修改")
+    await broadcast("settings", i18n.t(f"用户 {username} 口令已修改",
+                                       f"Password changed for user {username}"))
     return {"ok": True}
 
 
@@ -614,40 +661,40 @@ async def auth_logout():
 @app.post("/api/auth/enable")
 async def auth_enable(p: PasswordIn):
     if auth.enabled():
-        raise HTTPException(400, "访问控制已开启")
+        raise HTTPException(400, i18n.t("访问控制已开启", "Access control is already enabled"))
     if len(p.password) < 4:
-        raise HTTPException(400, "口令至少 4 位")
+        raise HTTPException(400, i18n.t("口令至少 4 位", "Password must be at least 4 characters"))
     auth.set_password(p.password)
     auth.bump_session_epoch()  # 重新启用 = 全部旧会话作废，需用新口令登录
     db.execute("INSERT INTO settings(key,value) VALUES('panel_auth','on') "
                "ON CONFLICT(key) DO UPDATE SET value='on'")
-    await broadcast("settings", "面板访问控制已开启")
+    await broadcast("settings", i18n.t("面板访问控制已开启", "Panel access control enabled"))
     return {"ok": True}
 
 
 @app.post("/api/auth/disable")
 async def auth_disable(p: PasswordIn, request: Request):
     if not auth.enabled():
-        raise HTTPException(400, "访问控制未开启")
+        raise HTTPException(400, i18n.t("访问控制未开启", "Access control is not enabled"))
     if not auth.verify_password(p.password):
-        raise HTTPException(401, "口令错误")
+        raise HTTPException(401, i18n.t("口令错误", "Incorrect password"))
     db.execute("UPDATE settings SET value='off' WHERE key='panel_auth'")
     auth.bump_session_epoch()
-    await broadcast("settings", "面板访问控制已关闭")
+    await broadcast("settings", i18n.t("面板访问控制已关闭", "Panel access control disabled"))
     return {"ok": True}
 
 
 @app.post("/api/auth/change")
 async def auth_change(c: ChangePwIn):
     if not auth.enabled():
-        raise HTTPException(400, "访问控制未开启")
+        raise HTTPException(400, i18n.t("访问控制未开启", "Access control is not enabled"))
     if not auth.verify_password(c.old):
-        raise HTTPException(401, "旧口令错误")
+        raise HTTPException(401, i18n.t("旧口令错误", "Old password is incorrect"))
     if len(c.new) < 4:
-        raise HTTPException(400, "新口令至少 4 位")
+        raise HTTPException(400, i18n.t("新口令至少 4 位", "New password must be at least 4 characters"))
     auth.set_password(c.new)
     auth.bump_session_epoch()  # 换口令后所有旧会话（含当前浏览器）失效，需重新登录
-    await broadcast("settings", "面板口令已更换")
+    await broadcast("settings", i18n.t("面板口令已更换", "Panel password changed"))
     return {"ok": True}
 
 
@@ -660,12 +707,13 @@ async def auth_change(c: ChangePwIn):
 async def ws_terminal(ws: WebSocket, hid: int):
     await ws.accept()
     if auth.enabled() and not auth.verify_session(ws.cookies.get(auth.COOKIE, "")):
-        await ws.send_text("面板未登录，终端连接被拒绝\r\n")
+        await ws.send_text(i18n.t("面板未登录，终端连接被拒绝\r\n",
+                                  "Panel not signed in — terminal connection refused\r\n"))
         await ws.close()
         return
     h = db.query_one("SELECT * FROM hosts WHERE id=?", (hid,))
     if not h:
-        await ws.send_text("主机不存在\r\n")
+        await ws.send_text(i18n.t("主机不存在\r\n", "Host not found\r\n"))
         await ws.close()
         return
     host = dict(h)
@@ -685,14 +733,15 @@ async def ws_terminal(ws: WebSocket, hid: int):
             return
     else:
         if terminal.asyncssh is None:
-            await ws.send_text("asyncssh 未安装，无法连接真实主机\r\n")
+            await ws.send_text(i18n.t("asyncssh 未安装，无法连接真实主机\r\n",
+                                      "asyncssh not installed — cannot connect to real hosts\r\n"))
             await ws.close()
             return
         try:
             await terminal.ssh_session(ws, host)
         except Exception as e:
             try:
-                await ws.send_text(f"\r\nSSH 连接失败: {type(e).__name__}: {e}\r\n")
+                await ws.send_text(f"\r\n{i18n.t(f'SSH 连接失败: {type(e).__name__}: {e}', f'SSH connection failed: {type(e).__name__}: {e}')}\r\n")
                 await ws.close()
             except Exception:
                 pass
@@ -703,11 +752,12 @@ async def ack_finding(fid: int):
     """人工确认告警：已知悉，停止 crit 周期重发（恢复后状态照常流转）。"""
     f = db.query_one("SELECT * FROM findings WHERE id=?", (fid,))
     if not f:
-        raise HTTPException(404, "finding 不存在")
+        raise HTTPException(404, i18n.t("finding 不存在", "finding not found"))
     if f["acked_at"]:
-        raise HTTPException(400, "该发现已确认过")
+        raise HTTPException(400, i18n.t("该发现已确认过", "This finding was already acknowledged"))
     db.execute("UPDATE findings SET acked_at=? WHERE id=?", (db.now(), fid))
-    await broadcast("proposal", f"发现已确认: {f['title']}", {"finding_id": fid})
+    await broadcast("proposal", i18n.t(f"发现已确认: {f['title']}",
+                                       f"Finding acknowledged: {f['title']}"), {"finding_id": fid})
     return {"ok": True}
 
 
@@ -719,12 +769,14 @@ class SilenceIn(BaseModel):
 async def silence_host(hid: int, s: SilenceIn):
     h = db.query_one("SELECT * FROM hosts WHERE id=?", (hid,))
     if not h:
-        raise HTTPException(404, "主机不存在")
+        raise HTTPException(404, i18n.t("主机不存在", "Host not found"))
     until = db.now() + s.minutes * 60 if s.minutes > 0 else 0
     db.execute("UPDATE hosts SET silenced_until=? WHERE id=?", (until, hid))
     await broadcast("host",
-                    f"{h['name']} 已静默 {s.minutes} 分钟" if s.minutes > 0
-                    else f"{h['name']} 已取消静默", {"host_id": hid})
+                    i18n.t(f"{h['name']} 已静默 {s.minutes} 分钟", f"{h['name']} silenced for {s.minutes} min")
+                    if s.minutes > 0
+                    else i18n.t(f"{h['name']} 已取消静默", f"{h['name']} unsilenced"),
+                    {"host_id": hid})
     return {"ok": True, "silenced_until": until}
 
 
@@ -733,9 +785,11 @@ async def trust_host_key(hid: int):
     """人工确认后重置主机指纹（下次连接重新 TOFU 记录）。"""
     h = db.query_one("SELECT * FROM hosts WHERE id=?", (hid,))
     if not h:
-        raise HTTPException(404, "主机不存在")
+        raise HTTPException(404, i18n.t("主机不存在", "Host not found"))
     db.execute("UPDATE hosts SET host_key_fp='', last_error='' WHERE id=?", (hid,))
-    await broadcast("host", f"{h['name']} 主机指纹已重置，下次连接将重新记录", {"host_id": hid})
+    await broadcast("host", i18n.t(f"{h['name']} 主机指纹已重置，下次连接将重新记录",
+                                   f"Host fingerprint of {h['name']} reset — will be re-recorded on next connect"),
+                    {"host_id": hid})
     return {"ok": True}
 
 
@@ -750,7 +804,7 @@ async def host_ports(hid: int):
     """当前 LISTEN 清单（last_extras.ports）+ 基线 + 基线外端口，供详情页「端口与暴露」tab。"""
     h = db.query_one("SELECT * FROM hosts WHERE id=?", (hid,))
     if not h:
-        raise HTTPException(404, "主机不存在")
+        raise HTTPException(404, i18n.t("主机不存在", "Host not found"))
     extras = db.uj(h["last_extras"], {}) or {}
     current = extras.get("ports") or []
     baseline = sorted(ports.get_baseline(hid))
@@ -769,7 +823,9 @@ async def ports_baseline_add(hid: int, b: PortBaselineIn, request: Request):
         db.execute("UPDATE findings SET status='resolved', resolved_at=? WHERE host_id=? AND type='port_new' "
                    "AND status IN ('open','analyzed') AND evidence LIKE ?",
                    (db.now(), hid, f'%{int(port)}%'))
-    await broadcast("host", f"主机 #{hid} 端口基线已更新（+{len(b.ports)}）", {"host_id": hid})
+    await broadcast("host", i18n.t(f"主机 #{hid} 端口基线已更新（+{len(b.ports)}）",
+                                   f"Port baseline of host #{hid} updated (+{len(b.ports)})"),
+                    {"host_id": hid})
     return {"ok": True}
 
 
@@ -779,7 +835,9 @@ async def ports_baseline_reset(hid: int, request: Request):
     _require_admin(request)
     db.execute("DELETE FROM settings WHERE key IN (?, ?)",
                (f"{ports.BASELINE_PREFIX}{hid}", f"{ports.BASELINE_PREFIX}{hid}:seen"))
-    await broadcast("host", f"主机 #{hid} 端口基线已重置，下轮巡检重新学习", {"host_id": hid})
+    await broadcast("host", i18n.t(f"主机 #{hid} 端口基线已重置，下轮巡检重新学习",
+                                   f"Port baseline of host #{hid} reset — relearned in the next inspection round"),
+                    {"host_id": hid})
     return {"ok": True}
 
 
@@ -788,10 +846,11 @@ async def ports_baseline_reset(hid: int, request: Request):
 @app.post("/api/hosts/{hid}/agent-token")
 async def gen_agent_token(hid: int):
     if not db.query_one("SELECT id FROM hosts WHERE id=?", (hid,)):
-        raise HTTPException(404, "主机不存在")
+        raise HTTPException(404, i18n.t("主机不存在", "Host not found"))
     token = agent.new_token()
     db.execute("UPDATE hosts SET agent_token=? WHERE id=?", (token, hid))
-    await broadcast("host", f"已为 #{hid} 生成出站 Agent Token", {"host_id": hid})
+    await broadcast("host", i18n.t(f"已为 #{hid} 生成出站 Agent Token",
+                                   f"Outbound agent token generated for host #{hid}"), {"host_id": hid})
     return {"token": token}
 
 
@@ -805,7 +864,7 @@ async def agent_push(authorization: str = ""):
     token = agent.parse_secret_token(authorization)
     h = agent.host_by_token(token)
     if not h:
-        raise HTTPException(401, "无效 agent token")
+        raise HTTPException(401, i18n.t("无效 agent token", "Invalid agent token"))
     # body parsed lazily to give a clean 401 before touching it
     return {"ok": True, "host": h["name"]}
 
@@ -824,11 +883,12 @@ async def agent_push_body(request: Request):
     token = request.headers.get("x-hw-token") or data.get("token", "")
     h = agent.host_by_token(token)
     if not h:
-        raise HTTPException(401, "无效 agent token")
+        raise HTTPException(401, i18n.t("无效 agent token", "Invalid agent token"))
     sig = request.headers.get("x-hw-signature")
     if sig:  # 签名通道：验签 + 时间戳防重放
         if not agent.verify_signature(token, raw, request.headers.get("x-hw-timestamp", ""), sig):
-            raise HTTPException(401, "签名无效或时间戳过期")
+            raise HTTPException(401, i18n.t("签名无效或时间戳过期",
+                                            "Invalid signature or expired timestamp"))
     # NaN/inf 防御：一个坏点就能让阈值判断全部失效并污染图表
     def _num(k: str) -> float:
         v = float(data.get(k, 0) or 0)
@@ -853,7 +913,8 @@ async def agent_push_body(request: Request):
     if extras:
         db.execute("UPDATE hosts SET last_extras=? WHERE id=?", (db.j(extras), h["id"]))
     await scheduler.process_findings(h, m, extras)
-    await broadcast("host", f"{h['name']} agent 指标已上报", {"host_id": h["id"]})
+    await broadcast("host", i18n.t(f"{h['name']} agent 指标已上报",
+                                   f"Agent metrics reported for {h['name']}"), {"host_id": h["id"]})
     return {"ok": True}
 
 
@@ -870,14 +931,16 @@ async def status_token_gen():
     tok = agent.new_token()  # hw_ 前缀随机 token，复用出站 agent 的生成器
     db.execute("INSERT INTO settings(key,value) VALUES('status_token',?) "
                "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (tok,))
-    await broadcast("settings", "公开状态页已开启（新分享链接）")
+    await broadcast("settings", i18n.t("公开状态页已开启（新分享链接）",
+                                       "Public status page enabled (new share link)"))
     return {"enabled": True, "token": tok}
 
 
 @app.delete("/api/status/token")
 async def status_token_revoke():
     db.execute("DELETE FROM settings WHERE key='status_token'")
-    await broadcast("settings", "公开状态页已关闭（链接立即失效）")
+    await broadcast("settings", i18n.t("公开状态页已关闭（链接立即失效）",
+                                       "Public status page disabled (link revoked immediately)"))
     return {"enabled": False}
 
 
@@ -887,7 +950,7 @@ def public_status(token: str):
     不在 /api 下，天然绕过面板会话门；token 撤销即失效。"""
     expected = (db.query_one("SELECT value FROM settings WHERE key='status_token'") or {}).get("value") or ""
     if not expected or token != expected:
-        raise HTTPException(404, "状态页不存在或已关闭")
+        raise HTTPException(404, i18n.t("状态页不存在或已关闭", "Status page not found or disabled"))
     return reports.render_status_page(analysis.fleet_snapshot())
 
 

@@ -266,6 +266,10 @@ def t_quiet_hours():
 
 def t_anonymize():
     print("[anonymize]")
+    # 现场免疫：占位符跟随面板语言（hw_lang），备份现场值固定 zh，测完还原（测试库可能与运行面板共用）
+    prev_lang = db.query_one("SELECT value FROM settings WHERE key='hw_lang'")
+    db.execute("INSERT INTO settings(key,value) VALUES('hw_lang','zh') "
+               "ON CONFLICT(key) DO UPDATE SET value=excluded.value")
     hid = db.execute(
         "INSERT INTO hosts(name,hostname,group_name,mock,created_at) VALUES('__t_anon__','192.168.7.7','t',1,?)",
         (db.now(),))
@@ -278,6 +282,10 @@ def t_anonymize():
     check("映射一致（同输入同占位）", out == analysis.anonymize(
         "主机 __t_anon__ (192.168.7.7) 上 root 从 8.8.8.8 登录", dict(mapping)))
     db.execute("DELETE FROM hosts WHERE id=?", (hid,))
+    if prev_lang:
+        db.execute("UPDATE settings SET value=? WHERE key='hw_lang'", (prev_lang["value"],))
+    else:
+        db.execute("DELETE FROM settings WHERE key='hw_lang'")
 
 
 def t_chat_stream_fallback():

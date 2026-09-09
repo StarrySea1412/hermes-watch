@@ -9,7 +9,7 @@
 """
 import json
 
-from . import db, rules
+from . import db, i18n, rules
 
 BASELINE_PREFIX = "ports_baseline:"
 
@@ -53,12 +53,15 @@ def evaluate_ports(host: dict, extras: dict) -> list[dict]:
     if new_ports:
         proc_by_port = {int(p["port"]): (p.get("proc") or "") for p in ports_raw if isinstance(p, dict)}
         for port in sorted(new_ports):
+            proc_name = proc_by_port.get(port, "")
             findings.append({
                 "host_id": host["id"], "ts": db.now(), "type": "port_new", "severity": "warn",
-                "title": f"新增监听端口 {port}",
-                "detail": (f"端口 {port} 不在既有基线中"
-                           + (f"，监听进程 {proc_by_port.get(port, '未知')}" if proc_by_port.get(port) else "")),
-                "evidence": {"port": port, "proc": proc_by_port.get(port, "")},
+                "title": i18n.t(f"新增监听端口 {port}", f"New listening port {port}"),
+                "detail": i18n.t(
+                    f"端口 {port} 不在既有基线中" + (f"，监听进程 {proc_name}" if proc_name else ""),
+                    f"Port {port} is not in the existing baseline"
+                    + (f", listening process: {proc_name}" if proc_name else "")),
+                "evidence": {"port": port, "proc": proc_name},
             })
 
     # 基线维护：新端口连续 SEEN_ROUNDS 轮仍在监听才并入基线（用户不处理则视为认可，

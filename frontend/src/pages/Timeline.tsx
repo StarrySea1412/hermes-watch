@@ -3,37 +3,45 @@ import { useNavigate } from 'react-router-dom'
 import { api, fmtTime, subscribe, type Event } from '../api'
 import { Ic, type IconName } from '../icons'
 import { PageHead } from '../ui'
+import { useT } from '../i18n'
 
 const KIND: Record<string, { icon: IconName; color: string; bg: string; border: string; label: string }> = {
-  finding: { icon: 'alert', color: 'var(--warn)', bg: 'var(--warn-bg)', border: 'var(--warn-border)', label: '发现' },
-  analysis: { icon: 'activity', color: 'var(--accent)', bg: 'var(--accent-dim)', border: 'var(--accent-border)', label: '诊断' },
-  proposal: { icon: 'pen', color: 'var(--violet)', bg: 'var(--violet-bg)', border: 'var(--violet-border)', label: '提案' },
-  report: { icon: 'file', color: 'var(--ok)', bg: 'var(--ok-bg)', border: 'var(--ok-border)', label: '报告' },
-  error: { icon: 'x-circle', color: 'var(--crit)', bg: 'var(--crit-bg)', border: 'var(--crit-border)', label: '错误' },
-  ok: { icon: 'check-circle', color: 'var(--ok)', bg: 'var(--ok-bg)', border: 'var(--ok-border)', label: '恢复' },
-  host: { icon: 'plus', color: 'var(--text-mute)', bg: 'var(--neutral-bg)', border: 'var(--border)', label: '主机' },
-  settings: { icon: 'sliders', color: 'var(--text-mute)', bg: 'var(--neutral-bg)', border: 'var(--border)', label: '设置' },
+  finding: { icon: 'alert', color: 'var(--warn)', bg: 'var(--warn-bg)', border: 'var(--warn-border)', label: 'tl.kind.finding' },
+  analysis: { icon: 'activity', color: 'var(--accent)', bg: 'var(--accent-dim)', border: 'var(--accent-border)', label: 'tl.kind.analysis' },
+  proposal: { icon: 'pen', color: 'var(--violet)', bg: 'var(--violet-bg)', border: 'var(--violet-border)', label: 'tl.kind.proposal' },
+  report: { icon: 'file', color: 'var(--ok)', bg: 'var(--ok-bg)', border: 'var(--ok-border)', label: 'tl.kind.report' },
+  error: { icon: 'x-circle', color: 'var(--crit)', bg: 'var(--crit-bg)', border: 'var(--crit-border)', label: 'tl.kind.error' },
+  ok: { icon: 'check-circle', color: 'var(--ok)', bg: 'var(--ok-bg)', border: 'var(--ok-border)', label: 'tl.kind.ok' },
+  host: { icon: 'plus', color: 'var(--text-mute)', bg: 'var(--neutral-bg)', border: 'var(--border)', label: 'tl.kind.host' },
+  settings: { icon: 'sliders', color: 'var(--text-mute)', bg: 'var(--neutral-bg)', border: 'var(--border)', label: 'nav.settings' },
 }
-const KIND_FALLBACK = { icon: 'clock' as IconName, color: 'var(--text-mute)', bg: 'var(--neutral-bg)', border: 'var(--border)', label: '事件' }
+const KIND_FALLBACK = { icon: 'clock' as IconName, color: 'var(--text-mute)', bg: 'var(--neutral-bg)', border: 'var(--border)', label: 'tl.kind.event' }
 
 /** 从事件 data 载荷推导可跳转动作（有就渲染「查看 →」链接） */
 function actionOf(e: Event): { label: string; to: string } | null {
   const d = e.data || {}
-  if (d.report_id) return { label: '查看报告', to: '/reports' }
-  if (d.finding_id || d.proposal_id || d.run_id) return { label: '查看诊断', to: '/diagnostics' }
+  if (d.report_id) return { label: 'tl.viewReport', to: '/reports' }
+  if (d.finding_id || d.proposal_id || d.run_id) return { label: 'tl.viewDiag', to: '/diagnostics' }
   return null
 }
 
-function dayLabel(ts: number): string {
+// 天分组 id 与语言无关（仅作 Map key / React key），展示标题由 dayKey 走 i18n
+function dayId(ts: number): string {
+  const d = new Date(ts * 1000)
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
+}
+
+function dayKey(ts: number): { key: string; vars?: Record<string, string | number> } {
   const d = new Date(ts * 1000)
   const now = new Date()
   const same = (a: Date, b: Date) => a.toDateString() === b.toDateString()
-  if (same(d, now)) return '今天'
-  if (same(d, new Date(now.getTime() - 86400_000))) return '昨天'
-  return `${d.getMonth() + 1} 月 ${d.getDate()} 日`
+  if (same(d, now)) return { key: 'tl.day.today' }
+  if (same(d, new Date(now.getTime() - 86400_000))) return { key: 'tl.day.yesterday' }
+  return { key: 'tl.day.date', vars: { m: d.getMonth() + 1, d: d.getDate() } }
 }
 
 export default function Timeline() {
+  const { t } = useT()
   const [events, setEvents] = useState<Event[]>([])
   const [kind, setKind] = useState('all')
   const [range, setRange] = useState(0)   // 秒；0 = 不限
@@ -62,12 +70,17 @@ export default function Timeline() {
   const groups = useMemo(() => {
     const m = new Map<string, Event[]>()
     for (const e of shown) {
-      const k = dayLabel(e.ts)
+      const k = dayId(e.ts)
       if (!m.has(k)) m.set(k, [])
       m.get(k)!.push(e)
     }
     return Array.from(m.entries())
   }, [shown])
+
+  const dayText = (ts: number) => {
+    const k = dayKey(ts)
+    return t(k.key, k.vars)
+  }
 
   const filterPill = (k: string, label: string) => (
     <button key={k} onClick={() => setKind(k)}
@@ -79,39 +92,39 @@ export default function Timeline() {
     </button>
   )
 
-  const RANGES: [number, string][] = [[3600, '近 1 小时'], [6 * 3600, '近 6 小时'], [86400, '近 24 小时'], [3 * 86400, '近 3 天'], [0, '全部时间']]
+  const RANGES: [number, string][] = [[3600, 'tl.range.1h'], [6 * 3600, 'tl.range.6h'], [86400, 'tl.range.24h'], [3 * 86400, 'tl.range.3d'], [0, 'tl.range.all']]
 
   return (
     <div className="fade-in max-w-4xl">
-      <PageHead title="巡检时间线" sub="采集 · 发现 · 诊断 · 提案 · 报告，全链路事件审计" />
+      <PageHead title={t('nav.timeline')} sub={t('tl.subtitle')} />
 
       {/* 概要条 */}
       <div className="card p-4 mb-4 space-y-3">
         <div className="flex items-center gap-x-6 gap-y-2 flex-wrap">
           <div className="text-[13px] text-[var(--text-mute)]">
-            <b className="num text-[var(--text-hi)] text-[16px]">{timeFiltered.length}</b> 条事件
+            <b className="num text-[var(--text-hi)] text-[16px]">{timeFiltered.length}</b> {t('tl.eventsSuffix')}
             <span className="text-[11px] text-[var(--text-faint)] ml-2">
-              {timeFiltered.length ? `覆盖 ${dayLabel(timeFiltered[timeFiltered.length - 1].ts)} 至今` : ''}
+              {timeFiltered.length ? t('tl.coveredTo', { day: dayText(timeFiltered[timeFiltered.length - 1].ts) }) : ''}
             </span>
           </div>
           <div className="flex items-center gap-2 flex-wrap ml-auto">
-            {filterPill('all', '全部')}
-            {filterPill('finding', '发现')}
-            {filterPill('analysis', '诊断')}
-            {filterPill('proposal', '提案')}
-            {filterPill('report', '报告')}
-            {filterPill('error', '错误')}
+            {filterPill('all', t('tl.kind.all'))}
+            {filterPill('finding', t('tl.kind.finding'))}
+            {filterPill('analysis', t('tl.kind.analysis'))}
+            {filterPill('proposal', t('tl.kind.proposal'))}
+            {filterPill('report', t('tl.kind.report'))}
+            {filterPill('error', t('tl.kind.error'))}
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap pt-3 border-t" style={{ borderColor: 'var(--border)' }}>
-          <span className="text-[11px] text-[var(--text-faint)] flex items-center gap-1">🕐 时间</span>
+          <span className="text-[11px] text-[var(--text-faint)] flex items-center gap-1">{t('tl.timeLabel')}</span>
           {RANGES.map(([sec, label]) => (
             <button key={sec} onClick={() => setRange(sec)}
               className={`pill ${range === sec ? '' : 'text-[var(--text-mute)]'}`}
               style={range === sec
                 ? { background: 'var(--violet-bg)', color: 'var(--violet)' }
                 : { background: 'var(--neutral-bg)' }}>
-              {label}
+              {t(label)}
             </button>
           ))}
         </div>
@@ -123,7 +136,7 @@ export default function Timeline() {
           <div className="sticky top-0 z-10 py-1.5 -mx-1 px-1 mb-1"
             style={{ background: 'linear-gradient(to top, var(--bg-base) 70%, transparent)' }}>
             <span className="pill" style={{ background: 'var(--neutral-strong-bg)', color: 'var(--text-mute)' }}>
-              {day} <b className="num">{evs.length}</b>
+              {dayText(evs[0].ts)} <b className="num">{evs.length}</b>
             </span>
           </div>
           <div className="relative ml-3 border-l border-[var(--border-strong)] space-y-2.5">
@@ -145,7 +158,7 @@ export default function Timeline() {
                   </span>
                   <div className="card p-3.5 hover:border-[var(--border-strong)] transition-colors" style={{ borderLeft: `3px solid ${k.color}` }}>
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="pill text-[10.5px]" style={{ background: k.bg, color: k.color }}>{k.label}</span>
+                      <span className="pill text-[10.5px]" style={{ background: k.bg, color: k.color }}>{t(k.label)}</span>
                       {e.host_name && (
                         <span className="pill text-[10.5px]" style={{ background: 'var(--neutral-bg)', color: 'var(--text-mute)' }}>
                           {e.host_name}
@@ -153,7 +166,7 @@ export default function Timeline() {
                       )}
                       {!!count && (
                         <span className="pill text-[10px]" style={{ background: 'var(--warn-bg)', color: 'var(--warn)' }}>
-                          持续中 ×{count}
+                          {t('tl.ongoing', { n: count })}
                         </span>
                       )}
                       <span className="ml-auto text-[10.5px] text-[var(--text-faint)] num">{fmtTime(e.ts)}</span>
@@ -162,7 +175,7 @@ export default function Timeline() {
                     {action && (
                       <button onClick={() => nav(action.to)}
                         className="text-[11.5px] mt-2 hover:underline" style={{ color: 'var(--accent)' }}>
-                        {action.label} →
+                        {t(action.label)} →
                       </button>
                     )}
                   </div>
@@ -176,13 +189,13 @@ export default function Timeline() {
       {!shown.length && (
         <div className="card p-10 text-center">
           <div className="flex justify-center mb-3 text-[var(--text-faint)]"><Ic name="clock" size={30} sw={1.5} /></div>
-          <div className="text-[var(--text-mute)] text-[13px]">{events.length ? '当前筛选条件下没有事件' : '还没有任何事件，等一轮巡检跑完'}</div>
+          <div className="text-[var(--text-mute)] text-[13px]">{events.length ? t('tl.emptyFiltered') : t('tl.empty')}</div>
         </div>
       )}
 
       {events.length >= limit && (
         <div className="text-center mt-2">
-          <button className="btn btn-ghost" onClick={() => setLimit(l => l + 120)}>加载更早的事件 ↓</button>
+          <button className="btn btn-ghost" onClick={() => setLimit(l => l + 120)}>{t('tl.loadOlder')}</button>
         </div>
       )}
     </div>

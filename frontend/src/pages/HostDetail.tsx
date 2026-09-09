@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { api, fmtNet, fmtTime, SEV, type Finding } from '../api'
+import { api, fmtNet, fmtTime, type Finding } from '../api'
+import { useT } from '../i18n'
 import { PageHead } from '../ui'
 import { Ic } from '../icons'
 import { HealthRing, LineChart } from '../charts'
@@ -14,8 +15,17 @@ type Detail = {
 }
 
   const TABS = ['进程', '服务与登录', '证书', 'IO 与温度', '端口与暴露'] as const
+// TABS 原值用作 state/比较值保持不动，展示文案另走 i18n
+const TAB_LABEL: Record<(typeof TABS)[number], string> = {
+  '进程': 'hd.tab.proc',
+  '服务与登录': 'hd.tab.svc',
+  '证书': 'hd.tab.cert',
+  'IO 与温度': 'hd.tab.io',
+  '端口与暴露': 'hd.tab.port',
+}
 
 export default function HostDetail() {
+  const { t } = useT()
   const { id } = useParams()
   const [d, setD] = useState<Detail | null>(null)
   const [err, setErr] = useState('')
@@ -62,21 +72,21 @@ export default function HostDetail() {
     return buckets
   }, [d, range])
   const HB_COLOR = { ok: 'var(--ok)', warn: 'var(--warn)', crit: 'var(--crit)', none: 'var(--border)' } as const
-  const HB_LABEL = { ok: '正常', warn: '警告', crit: '严重', none: '无数据' } as const
+  const HB_LABEL = { ok: 'hd.hb.ok', warn: 'sev.warn', crit: 'sev.crit', none: 'hd.hb.none' } as const
 
   if (err && !d) return (
     <div className="fade-in">
-      <PageHead title="主机详情" />
+      <PageHead title={t('hd.title')} />
       <div className="card p-10 text-center">
         <div className="text-3xl mb-3">📡</div>
-        <div className="text-[13px] text-[var(--text-mute)] mb-1">主机数据加载失败</div>
+        <div className="text-[13px] text-[var(--text-mute)] mb-1">{t('hd.loadFailed')}</div>
         <div className="text-[11.5px] text-[var(--text-faint)] mono mb-4">{err}</div>
-        <button className="btn btn-primary" onClick={reload}><Ic name="refresh" size={13} /> 重试</button>
-        <div className="text-[11px] text-[var(--text-faint)] mt-4">后端可能正在重启，或主机不可达；稍候重试即可</div>
+        <button className="btn btn-primary" onClick={reload}><Ic name="refresh" size={13} /> {t('btn.retry')}</button>
+        <div className="text-[11px] text-[var(--text-faint)] mt-4">{t('hd.loadFailedHint')}</div>
       </div>
     </div>
   )
-  if (!d) return <div className="text-[var(--text-faint)]">加载中…</div>
+  if (!d) return <div className="text-[var(--text-faint)]">{t('hd.loading')}</div>
   // extras 各键可缺省（旧数据/单探针失败），全部给安全默认值 —— 每个字段的 .map/.length 都不能裸调
   const ex = (d.extras ?? {}) as Detail['extras']
   const logins = Array.isArray(ex.logins) ? ex.logins : []
@@ -93,12 +103,12 @@ export default function HostDetail() {
 
   return (
     <div className="fade-in">
-      <PageHead title={d.host.name} sub={`${d.host.hostname} · SSH ${d.host.username}@${d.host.hostname} · ${d.host.mock ? '演示主机' : '真实主机'} · 发现时间在图表上以红色虚线标注`}>
-        {[[60, '1 小时'], [240, '4 小时'], [1440, '24 小时']].map(([r, l]) => (
+      <PageHead title={d.host.name} sub={`${d.host.hostname} · SSH ${d.host.username}@${d.host.hostname} · ${d.host.mock ? t('hd.mockHost') : t('hd.realHost')} · ${t('hd.findingsMarked')}`}>
+        {[[60, 'hd.range.1h'], [240, 'hd.range.4h'], [1440, 'hd.range.24h']].map(([r, l]) => (
           <button key={r as number} onClick={() => setRange(r as number)}
             className={`pill ${range === r ? '' : 'text-[var(--text-mute)]'}`}
             style={range === r ? { background: 'var(--accent-dim)', color: 'var(--accent)' } : { background: 'var(--neutral-bg)' }}>
-            {l}
+            {t(l as string)}
           </button>
         ))}
       </PageHead>
@@ -107,37 +117,37 @@ export default function HostDetail() {
         <div className="card p-4 flex items-center gap-4 w-full xl:w-72 xl:shrink-0">
           <HealthRing score={score} size={80} />
           <div className="text-sm">
-            <div className="text-[var(--text-hi)] font-semibold">{d.findings.length} 条发现</div>
+            <div className="text-[var(--text-hi)] font-semibold">{t('hd.findingCount', { n: d.findings.length })}</div>
             <div className="text-[11.5px] text-[var(--text-faint)] mt-1.5 space-y-0.5">
-              <div className="num">CPU {latest?.cpu.toFixed(0)}% · 内存 {latest?.mem.toFixed(0)}%</div>
-              <div className="num">磁盘 {latest?.disk.toFixed(0)}% · 负载 {latest?.load1?.toFixed(2)}</div>
+              <div className="num">{t('hd.metric.cpuMem', { c: latest?.cpu.toFixed(0) ?? '', m: latest?.mem.toFixed(0) ?? '' })}</div>
+              <div className="num">{t('hd.metric.diskLoad', { d: latest?.disk.toFixed(0) ?? '', l: latest?.load1?.toFixed(2) ?? '' })}</div>
               {!!latest?.swap && latest.swap > 0 && (
                 <div className="num">Swap {latest.swap.toFixed(0)}%</div>
               )}
-              <div className="num">网入 {fmtNet(latest?.net_in ?? 0)}</div>
+              <div className="num">{t('hd.metric.netIn', { v: fmtNet(latest?.net_in ?? 0) })}</div>
             </div>
           </div>
         </div>
       <div className="card p-3 flex-1">
         <LineChart data={chartData} marks={marks} height={230} series={[
           { name: 'CPU', key: 1, color: P['--m-cpu'] },
-          { name: '内存', key: 2, color: P['--m-mem'] },
-          { name: '磁盘', key: 3, color: P['--m-disk'] },
+          { name: t('hd.series.mem'), key: 2, color: P['--m-mem'] },
+          { name: t('hd.series.disk'), key: 3, color: P['--m-disk'] },
         ]} />
         <div className="mt-2.5 px-1">
           <div className="flex items-center gap-2 mb-1.5">
-            <span className="text-[11px] text-[var(--text-faint)]">巡检心跳</span>
+            <span className="text-[11px] text-[var(--text-faint)]">{t('hd.heartbeat')}</span>
             <div className="flex items-center gap-2.5 ml-auto text-[10px] text-[var(--text-faint)]">
               {(['ok', 'warn', 'crit'] as const).map(k => (
                 <span key={k} className="flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-sm" style={{ background: HB_COLOR[k] }} />{HB_LABEL[k]}
+                  <span className="w-2 h-2 rounded-sm" style={{ background: HB_COLOR[k] }} />{t(HB_LABEL[k])}
                 </span>
               ))}
             </div>
           </div>
           <div className="flex gap-[2px] h-4">
             {heartbeat.map((b, i) => (
-              <div key={i} className="flex-1 rounded-[2px] transition-colors" title={`${fmtTime(b.from)} · ${HB_LABEL[b.state]}`}
+              <div key={i} className="flex-1 rounded-[2px] transition-colors" title={`${fmtTime(b.from)} · ${t(HB_LABEL[b.state])}`}
                 style={{ background: HB_COLOR[b.state], opacity: b.state === 'none' ? 0.5 : 0.9 }} />
             ))}
           </div>
@@ -155,15 +165,15 @@ export default function HostDetail() {
               }}>
               <div className="flex items-center gap-3 flex-wrap">
                 <span className="pill" style={{ background: f.severity === 'crit' ? 'var(--crit-bg)' : 'var(--warn-bg)', color: f.severity === 'crit' ? 'var(--crit)' : 'var(--warn)' }}>
-                  {SEV[f.severity].label}
+                  {t(`sev.${f.severity}`)}
                 </span>
                 <span className="font-semibold text-[14px]">{f.title}</span>
-                <span className="text-[11px] text-[var(--text-faint)] num ml-auto">{fmtTime(f.ts)} · {f.status === 'analyzed' ? '已诊断' : '待诊断'}</span>
+                <span className="text-[11px] text-[var(--text-faint)] num ml-auto">{fmtTime(f.ts)} · {f.status === 'analyzed' ? t('status.analyzed') : t('status.open')}</span>
               </div>
               {f.card && (
                 <div className="mt-3 text-[13px] inset p-3">
-                  <span className="text-[var(--accent)] font-semibold">根因：</span>{f.card.root_cause}
-                  {f.card.proposal_id && <div className="text-[11px] text-[var(--text-faint)] mt-1.5">已生成修复提案 → 诊断中心审批</div>}
+                  <span className="text-[var(--accent)] font-semibold">{t('hd.rootCause')}</span>{f.card.root_cause}
+                  {f.card.proposal_id && <div className="text-[11px] text-[var(--text-faint)] mt-1.5">{t('hd.proposalCreated')}</div>}
                 </div>
               )}
             </div>
@@ -173,11 +183,11 @@ export default function HostDetail() {
 
       <div className="card p-4">
         <div className="flex gap-2 mb-3.5">
-          {TABS.map(t => (
-            <button key={t} onClick={() => setTab(t)}
-              className={`pill ${tab === t ? '' : 'text-[var(--text-mute)]'}`}
-              style={tab === t ? { background: 'var(--accent-dim)', color: 'var(--accent)' } : { background: 'var(--neutral-bg)' }}>
-              {t}
+          {TABS.map(tabName => (
+            <button key={tabName} onClick={() => setTab(tabName)}
+              className={`pill ${tab === tabName ? '' : 'text-[var(--text-mute)]'}`}
+              style={tab === tabName ? { background: 'var(--accent-dim)', color: 'var(--accent)' } : { background: 'var(--neutral-bg)' }}>
+              {t(TAB_LABEL[tabName])}
             </button>
           ))}
         </div>
@@ -188,10 +198,10 @@ export default function HostDetail() {
         )}
         {tab === '服务与登录' && (
           <div className="text-[13px] space-y-3">
-            <div>失败服务：{failedServices.length
+            <div>{t('hd.failedServices')}{failedServices.length
               ? failedServices.map(s => <span key={s} className="pill mr-1.5" style={{ background: 'var(--crit-bg)', color: 'var(--crit)' }}>{s}</span>)
-              : <span className="text-[var(--ok)]">无</span>}</div>
-            <div className="text-[var(--text-mute)] text-[12px]">最近登录</div>
+              : <span className="text-[var(--ok)]">{t('hd.none')}</span>}</div>
+            <div className="text-[var(--text-mute)] text-[12px]">{t('hd.recentLogins')}</div>
             {logins.length ? (
               <div className="overflow-x-auto">
                 <table className="text-[12px] w-full">
@@ -200,67 +210,67 @@ export default function HostDetail() {
                     <tr key={i} style={{ color: isPrivate(l.ip) ? 'var(--text)' : 'var(--crit)' }}>
                       <td className="py-1.5 pr-8 font-medium">{l.user}</td>
                       <td className="pr-8 text-[var(--text-faint)]">{l.tty}</td>
-                      <td className="pr-8 mono">{l.ip}{!isPrivate(l.ip) && ' ⚠ 外部来源'}</td>
+                      <td className="pr-8 mono">{l.ip}{!isPrivate(l.ip) && t('hd.externalSource')}</td>
                       <td className="text-[var(--text-faint)] num">{l.when}</td>
                     </tr>
                   ))}
                 </tbody>
                 </table>
               </div>
-            ) : <div className="text-[var(--text-faint)] text-[12px]">暂无登录记录（探针未取到 last 输出）</div>}
+            ) : <div className="text-[var(--text-faint)] text-[12px]">{t('hd.noLogins')}</div>}
           </div>
         )}
         {tab === '证书' && (
           <div className="text-[13px]">
-            证书剩余有效期：
+            {t('hd.certValid')}
             <span className="font-bold ml-1.5 num" style={{ color: certDays !== null && certDays < 14 ? 'var(--warn)' : 'var(--ok)' }}>
-              {certDays ?? '—'} 天
+              {t('hd.certDays', { n: certDays ?? '—' })}
             </span>
-            <div className="text-[11px] text-[var(--text-faint)] mt-1.5">检测 /etc/letsencrypt 下的证书，14 天内到期将产生警告发现</div>
+            <div className="text-[11px] text-[var(--text-faint)] mt-1.5">{t('hd.certHint')}</div>
           </div>
         )}
         {tab === 'IO 与温度' && (
           <div className="text-[13px] space-y-2.5">
-            <div>磁盘 IO（agent 采样窗口均值）：
-              读 <b className="num ml-1">{(ioRead / 1024).toFixed(2)} MB/s</b>
+            <div>{t('hd.diskIO')}
+              {t('hd.read')} <b className="num ml-1">{(ioRead / 1024).toFixed(2)} MB/s</b>
               <span className="text-[var(--text-faint)] mx-2">·</span>
-              写 <b className="num ml-1" style={{ color: ioWrite >= 80 * 1024 ? 'var(--warn)' : 'inherit' }}>
+              {t('hd.write')} <b className="num ml-1" style={{ color: ioWrite >= 80 * 1024 ? 'var(--warn)' : 'inherit' }}>
                 {(ioWrite / 1024).toFixed(2)} MB/s</b>
-              {ioRead === 0 && ioWrite === 0 && <span className="text-[var(--text-faint)] ml-2">（无上报数据——出站 agent 主机才采集）</span>}
+              {ioRead === 0 && ioWrite === 0 && <span className="text-[var(--text-faint)] ml-2">{t('hd.ioNoData')}</span>}
             </div>
-            <div>温度：
+            <div>{t('hd.temp')}
               {tempC > 0
                 ? <b className="num ml-1" style={{ color: tempC >= 80 ? 'var(--crit)' : tempC >= 70 ? 'var(--warn)' : 'var(--ok)' }}>{tempC.toFixed(1)}°C</b>
-                : <span className="text-[var(--text-faint)] ml-1">未检测到温度传感器</span>}
+                : <span className="text-[var(--text-faint)] ml-1">{t('hd.noTempSensor')}</span>}
             </div>
-            <div className="text-[11px] text-[var(--text-faint)]">写入持续超 80 MB/s 或温度超 80°C 时规则引擎产生发现；阈值可在设置页调整</div>
+            <div className="text-[11px] text-[var(--text-faint)]">{t('hd.ioHint')}</div>
           </div>
         )}
         {tab === '端口与暴露' && (
           <div className="text-[13px]">
-            {!portInfo && <div className="text-[var(--text-faint)]">读取端口清单…（agent 或 SSH 探针上报）</div>}
+            {!portInfo && <div className="text-[var(--text-faint)]">{t('hd.portLoading')}</div>}
             {portInfo && (
               <>
                 <div className="flex items-center gap-2.5 mb-2.5 flex-wrap">
-                  <span>当前监听 <b className="num">{portInfo.ports.length}</b> 个端口</span>
+                  <span>{t('hd.listening')} <b className="num">{portInfo.ports.length}</b> {t('hd.portsUnit')}</span>
                   <span className="text-[var(--text-faint)]">·</span>
-                  <span>基线 <b className="num">{portInfo.baseline.length}</b> 个</span>
+                  <span>{t('hd.baseline')} <b className="num">{portInfo.baseline.length}</b> {t('hd.baselineUnit')}</span>
                   {portInfo.new_ports.length > 0 && (
                     <span className="pill" style={{ background: 'var(--warn-bg)', color: 'var(--warn)' }}>
-                      基线外 {portInfo.new_ports.join(', ')}
+                      {t('hd.outOfBaselineN', { n: portInfo.new_ports.join(', ') })}
                     </span>
                   )}
                   <button className="btn btn-ghost ml-auto shrink-0" style={{ fontSize: 11 }}
-                    title="业务大改后使用：下一轮巡检重新学习基线"
+                    title={t('hd.resetBaselineTitle')}
                     onClick={() => api(`/hosts/${id}/ports/baseline`, { method: 'DELETE' })
-                      .then(() => setPortInfo(null))}>↺ 重置基线</button>
+                      .then(() => setPortInfo(null))}>{t('hd.resetBaseline')}</button>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="text-[12px] w-full">
                     <thead>
                       <tr className="text-[11px] text-[var(--text-faint)] text-left border-b border-[var(--border)]">
-                        <th className="py-2 font-medium">端口</th><th className="font-medium">监听地址</th>
-                        <th className="font-medium">进程</th><th className="font-medium">基线</th><th></th>
+                        <th className="py-2 font-medium">{t('hd.col.port')}</th><th className="font-medium">{t('hd.col.addr')}</th>
+                        <th className="font-medium">{t('hd.col.proc')}</th><th className="font-medium">{t('hd.baseline')}</th><th></th>
                       </tr>
                     </thead>
                     <tbody>
@@ -273,28 +283,28 @@ export default function HostDetail() {
                             <td className="text-[var(--text-mute)]">{p.proc || '—'}</td>
                             <td>
                               {inBaseline
-                                ? <span className="pill" style={{ background: 'var(--ok-bg)', color: 'var(--ok)', fontSize: 10 }}>基线内</span>
-                                : <span className="pill" style={{ background: 'var(--warn-bg)', color: 'var(--warn)', fontSize: 10 }}>基线外</span>}
+                                ? <span className="pill" style={{ background: 'var(--ok-bg)', color: 'var(--ok)', fontSize: 10 }}>{t('hd.inBaseline')}</span>
+                                : <span className="pill" style={{ background: 'var(--warn-bg)', color: 'var(--warn)', fontSize: 10 }}>{t('hd.notInBaseline')}</span>}
                             </td>
                             <td className="text-right">
                               {!inBaseline && (
                                 <button className="text-[11.5px] text-[var(--text-faint)] hover:text-[var(--accent)]"
-                                  title="确认为合法业务端口：加入基线后不再告警"
+                                  title={t('hd.addToBaselineTitle')}
                                   onClick={() => api(`/hosts/${id}/ports/baseline`, { method: 'POST', body: JSON.stringify({ ports: [p.port] }) })
-                                    .then(() => setPortInfo(null))}>加入基线</button>
+                                    .then(() => setPortInfo(null))}>{t('hd.addToBaseline')}</button>
                               )}
                             </td>
                           </tr>
                         )
                       })}
                       {!portInfo.ports.length && (
-                        <tr><td colSpan={5} className="py-3 text-[var(--text-faint)]">暂无端口上报（需出站 agent 或 SSH 探针采集）</td></tr>
+                        <tr><td colSpan={5} className="py-3 text-[var(--text-faint)]">{t('hd.noPorts')}</td></tr>
                       )}
                     </tbody>
                   </table>
                 </div>
                 <div className="text-[11px] text-[var(--text-faint)] mt-2.5 leading-relaxed">
-                  基线外的监听端口会立即产生「新增监听端口」发现；连续 5 轮仍存在则自动并入基线。端口消失不告警，基线同步收缩。
+                  {t('hd.portsHint')}
                 </div>
               </>
             )}

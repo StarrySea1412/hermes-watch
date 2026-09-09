@@ -3,19 +3,15 @@ import ReactMarkdown from 'react-markdown'
 import { fmtTime } from '../api'
 import { Ic } from '../icons'
 import { PageHead } from '../ui'
+import { useT } from '../i18n'
 
 type Msg = { role: 'user' | 'bot'; text: string; source?: string; ts: number; streaming?: boolean }
 
-const QUICK = [
-  '现在 fleet 整体健康状况如何？',
-  '哪台机器最需要马上处理？',
-  '总结当前所有发现',
-  'db-1 的情况怎么样？',
-]
+const QUICK_KEYS = ['chat.quick.0', 'chat.quick.1', 'chat.quick.2', 'chat.quick.3']
 
 const SOURCE_LABEL: Record<string, string> = {
-  llm: 'LLM 叙事（基于实时快照）',
-  fallback: '规则引擎摘要（LLM 不可用）',
+  llm: 'chat.source.llm',
+  fallback: 'chat.source.fallback',
 }
 const SOURCE_PILL: Record<string, React.CSSProperties> = {
   llm: { background: 'var(--violet-bg)', color: 'var(--violet)' },
@@ -32,6 +28,7 @@ const loadHistory = (): Msg[] => {
 }
 
 export default function Chat() {
+  const { t } = useT()
   const [msgs, setMsgs] = useState<Msg[]>(loadHistory)
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
@@ -98,7 +95,7 @@ export default function Chat() {
       }
     } catch (e: any) {
       setMsgs(m => m.map((msg, i) => i === m.length - 1 && msg.role === 'bot' && msg.streaming
-        ? { ...msg, text: msg.text ? `${msg.text}\n\n（连接中断: ${e.message}）` : `请求失败: ${e.message}` }
+        ? { ...msg, text: msg.text ? `${msg.text}\n\n${t('chat.err.disconnected', { n: e.message })}` : t('chat.err.requestFailed', { n: e.message }) }
         : msg))
     } finally {
       setBusy(false)
@@ -115,10 +112,10 @@ export default function Chat() {
 
   return (
     <div className="fade-in flex flex-col h-[calc(100vh-120px)]">
-      <PageHead title="AI 对话" sub="回答基于实时 fleet 快照（grounded）· AI 外发未开启时自动降级为本地规则引擎摘要">
+      <PageHead title={t('nav.chat')} sub={t('chat.headSub')}>
         {!!msgs.length && (
           <button className="btn btn-ghost" onClick={() => { setMsgs([]); try { localStorage.removeItem(CHAT_KEY) } catch { /* noop */ } }}>
-            <Ic name="trash" size={13} /> 清空对话
+            <Ic name="trash" size={13} /> {t('chat.clear')}
           </button>
         )}
       </PageHead>
@@ -134,18 +131,21 @@ export default function Chat() {
                   <Ic name="sparkles" size={22} sw={1.6} />
                 </div>
               </div>
-              <div className="text-[15px] font-semibold text-[var(--text-hi)] mb-2">问问你的 fleet</div>
+              <div className="text-[15px] font-semibold text-[var(--text-hi)] mb-2">{t('chat.welcomeTitle')}</div>
               <p className="text-[12.5px] text-[var(--text-faint)] leading-relaxed mb-5">
-                每次回答都附带最新巡检快照作为上下文，绝不凭空编造。<br />
-                在设置里开启 AI 外发并配置 LLM 后，可获得自然语言叙事；未开启时由本地规则引擎直接回答。
+                {t('chat.welcomeLine1')}<br />
+                {t('chat.welcomeLine2')}
               </p>
               <div className="grid grid-cols-2 gap-2.5">
-                {QUICK.map(q => (
-                  <button key={q} onClick={() => send(q)} className="inset px-3.5 py-2.5 text-[12.5px] text-[var(--text-mute)]
-                    hover:text-[var(--accent)] hover:border-[var(--accent-border)] transition-colors text-left flex items-center gap-2">
-                    <Ic name="play" size={11} style={{ opacity: 0.6 }} /> {q}
-                  </button>
-                ))}
+                {QUICK_KEYS.map(k => {
+                  const q = t(k)
+                  return (
+                    <button key={k} onClick={() => send(q)} className="inset px-3.5 py-2.5 text-[12.5px] text-[var(--text-mute)]
+                      hover:text-[var(--accent)] hover:border-[var(--accent-border)] transition-colors text-left flex items-center gap-2">
+                      <Ic name="play" size={11} style={{ opacity: 0.6 }} /> {q}
+                    </button>
+                  )
+                })}
               </div>
             </div>
           )}
@@ -169,7 +169,7 @@ export default function Chat() {
                 <div className="flex items-center gap-2 mb-1.5">
                   <span className="text-[12.5px] font-semibold text-[var(--text-hi)]">Hermes</span>
                   <span className="pill text-[10px]" style={SOURCE_PILL[m.source ?? ''] ?? { background: 'var(--neutral-bg)', color: 'var(--text-mute)' }}>
-                    {SOURCE_LABEL[m.source ?? ''] ?? '本地规则引擎'}
+                    {SOURCE_LABEL[m.source ?? ''] ? t(SOURCE_LABEL[m.source ?? '']) : t('chat.source.local')}
                   </span>
                   <span className="ml-auto text-[10.5px] text-[var(--text-faint)] num opacity-0 group-hover:opacity-100 transition-opacity">{fmtTime(m.ts)}</span>
                 </div>
@@ -179,7 +179,7 @@ export default function Chat() {
                     <ReactMarkdown>{m.text}</ReactMarkdown>
                     {m.streaming && <span className="stream-cursor">▍</span>}
                   </div>
-                  <button title="复制回答" onClick={() => copyMsg(i, m.text)}
+                  <button title={t('chat.copyAnswer')} onClick={() => copyMsg(i, m.text)}
                     className="absolute top-2 right-2 w-7 h-7 rounded-lg flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
                     style={{ background: 'var(--neutral-bg)', border: '1px solid var(--border)', color: copied === i ? 'var(--ok)' : 'var(--text-mute)' }}>
                     {copied === i ? <Ic name="check-circle" size={12} /> : <Ic name="copy" size={12} />}
@@ -199,7 +199,7 @@ export default function Chat() {
                 <span className="flex items-center gap-1">
                   <span className="typing-dot" /><span className="typing-dot" /><span className="typing-dot" />
                 </span>
-                <span className="text-[12.5px] text-[var(--text-faint)]">正在基于最新 fleet 快照思考…</span>
+                <span className="text-[12.5px] text-[var(--text-faint)]">{t('chat.thinking')}</span>
               </div>
             </div>
           )}
@@ -213,17 +213,17 @@ export default function Chat() {
             className="input mono flex-1"
             style={{ background: 'transparent', border: 'none', boxShadow: 'none', resize: 'none',
                      minHeight: 38, maxHeight: 132, padding: '8px 10px' }}
-            placeholder="询问 fleet 状态、某台主机、当前发现…"
+            placeholder={t('chat.inputPh')}
             value={input} onChange={onChange}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }} />
           <button className="btn btn-primary shrink-0" style={{ borderRadius: 12, padding: '9px 14px' }}
             disabled={busy || !input.trim()} onClick={() => send()}
-            title="发送（Enter）">
+            title={t('chat.sendTip')}>
             {busy ? <span className="pulse-dot" style={{ background: 'var(--accent)' }} /> : <Ic name="send" size={14} />}
           </button>
         </div>
         <div className="text-[10.5px] text-[var(--text-faint)] text-center mt-2">
-          Enter 发送 · Shift + Enter 换行 · 回答基于最新巡检快照，仅供参考
+          {t('chat.footer')}
         </div>
       </div>
     </div>

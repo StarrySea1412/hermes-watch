@@ -1,22 +1,25 @@
 import { useEffect, useMemo, useState } from 'react'
-import { api, fmtTime, SEV, subscribe, type Finding, type Proposal } from '../api'
+import { api, fmtTime, subscribe, type Finding, type Proposal } from '../api'
 import { Ic } from '../icons'
 import { PageHead } from '../ui'
+import { useT } from '../i18n'
 
 const RUN_STYLE = (s: string) => s === 'ok'
   ? { background: 'var(--ok-bg)', color: 'var(--ok)' }
   : s === 'refused' ? { background: 'var(--neutral-bg)', color: 'var(--text-mute)' }
   : { background: 'var(--crit-bg)', color: 'var(--crit)' }
-const RUN_LABEL: Record<string, string> = { ok: '✓ 执行成功', failed: '✕ 执行失败', timeout: '⏱ 超时终止', refused: '⛔ 已拦截' }
+const RUN_LABEL: Record<string, string> = { ok: 'diag.run.ok', failed: 'diag.run.failed', timeout: 'diag.run.timeout', refused: 'diag.run.refused' }
 
 const SEV_STYLE = (s: string) => s === 'crit'
   ? { background: 'var(--crit-bg)', color: 'var(--crit)' }
   : s === 'warn' ? { background: 'var(--warn-bg)', color: 'var(--warn)' }
   : { background: 'var(--info-bg)', color: 'var(--info)' }
 const SEV_BAR: Record<string, string> = { crit: 'var(--crit)', warn: 'var(--warn)', info: 'var(--info)' }
+// 置信度后端值为中文等级（高/中/低），显示层按语言翻译
+const CONF_KEY: Record<string, string> = { '高': 'diag.conf.high', '中': 'diag.conf.mid', '低': 'diag.conf.low' }
 
 /* 诊断流水线：发现 → 深挖 → 根因 → 提案 → 审批 → 执行 */
-const STAGES = ['发现', 'Agent 深挖', '根因结论', '修复提案', '人工审批', '执行留痕']
+const STAGES = ['diag.stage.discover', 'diag.stage.deep', 'diag.stage.root', 'diag.stage.proposal', 'diag.stage.approval', 'diag.stage.execute']
 
 function stageOf(f: Finding, p?: Proposal): { active: number; done: number; blocked?: boolean } {
   if (f.status === 'open') return { active: 1, done: 0 }
@@ -31,6 +34,7 @@ function stageOf(f: Finding, p?: Proposal): { active: number; done: number; bloc
 }
 
 export default function Diagnostics() {
+  const { t } = useT()
   const [findings, setFindings] = useState<Finding[]>([])
   const [props, setProps] = useState<Proposal[]>([])
   const [sel, setSel] = useState<number | null>(null)
@@ -89,20 +93,20 @@ export default function Diagnostics() {
 
   return (
     <div className="fade-in">
-      <PageHead title="诊断中心" sub="根因卡片 · 证据链 · 只读提议制（批准后才执行）" />
+      <PageHead title={t('nav.diagnostics')} sub={t('diag.headSub')} />
 
       {/* 统计 + 筛选 */}
       <div className="flex items-center gap-2 mb-4 flex-wrap">
-        {filterPill('all', '全部', undefined, findings.length)}
-        {filterPill('crit', '严重', 'var(--crit)', counts.crit)}
-        {filterPill('warn', '警告', 'var(--warn)', counts.warn)}
-        {filterPill('info', '提示', 'var(--info)', counts.info)}
+        {filterPill('all', t('diag.filter.all'), undefined, findings.length)}
+        {filterPill('crit', t('sev.crit'), 'var(--crit)', counts.crit)}
+        {filterPill('warn', t('sev.warn'), 'var(--warn)', counts.warn)}
+        {filterPill('info', t('sev.info'), 'var(--info)', counts.info)}
         <button onClick={() => setOpenOnly(v => !v)}
           className={`pill ${openOnly ? '' : 'text-[var(--text-mute)]'}`}
           style={openOnly
             ? { background: 'var(--accent-dim)', color: 'var(--accent)', border: '1px solid var(--accent-border)' }
             : { background: 'var(--neutral-bg)', border: '1px solid transparent' }}>
-          隐藏已解决 <b className="num">{counts.resolved}</b>
+          {t('diag.hideResolved')} <b className="num">{counts.resolved}</b>
         </button>
       </div>
 
@@ -125,21 +129,21 @@ export default function Diagnostics() {
                   borderLeftColor: selected ? 'var(--accent)' : SEV_BAR[f.severity],
                 }}>
                 <div className="flex items-center gap-2">
-                  <span className="pill" style={SEV_STYLE(f.severity)}>{SEV[f.severity].label}</span>
+                  <span className="pill" style={SEV_STYLE(f.severity)}>{t(`sev.${f.severity}`)}</span>
                   <span className="text-[13px] font-semibold text-[var(--text-hi)]">{f.host_name}</span>
                   <span className="ml-auto text-[10.5px] text-[var(--text-faint)] num">{fmtTime(f.ts).slice(5, 16)}</span>
                 </div>
                 <div className="text-[13.5px] mt-2 text-[var(--text)] font-medium">{f.title}</div>
                 <div className="text-[11px] text-[var(--text-faint)] mt-1.5 flex items-center gap-1.5 flex-wrap">
                   <span className="w-1.5 h-1.5 rounded-full" style={{ background: f.status === 'open' ? 'var(--warn)' : f.status === 'analyzed' ? 'var(--accent)' : 'var(--ok)' }} />
-                  {f.status === 'open' ? '待诊断' : f.status === 'analyzed' ? '已诊断' : '已解决'}
-                  <span className="text-[var(--text-faint)]">· 流程 {Math.min(st.done, 5)}/{5}</span>
+                  {f.status === 'open' ? t('status.open') : f.status === 'analyzed' ? t('status.analyzed') : t('status.resolved')}
+                  <span className="text-[var(--text-faint)]">{t('diag.pipeline.progress', { n: Math.min(st.done, 5) })}</span>
                   {p && <span className="pill" style={{
                     fontSize: 10, padding: '0 7px',
                     ...(p.status === 'approved' ? { background: 'var(--ok-bg)', color: 'var(--ok)' }
                       : p.status === 'rejected' ? { background: 'var(--neutral-bg)', color: 'var(--text-faint)' }
                         : { background: 'var(--violet-bg)', color: 'var(--violet)' }),
-                  }}>{p.status === 'pending' ? '提案待审批' : p.status === 'approved' ? '提案已批准 ✓' : '提案已拒绝'}</span>}
+                  }}>{p.status === 'pending' ? t('diag.proposalPending') : p.status === 'approved' ? t('diag.proposalApproved') : t('diag.proposalRejected')}</span>}
                 </div>
               </div>
             )
@@ -149,40 +153,40 @@ export default function Diagnostics() {
               <div className="flex justify-center mb-3 text-[var(--text-faint)]">
                 <Ic name={findings.length ? 'search' : 'check-circle'} size={30} sw={1.5} />
               </div>
-              <div className="text-[var(--text-mute)] text-[13px]">{findings.length ? '当前筛选条件下没有匹配的发现' : '当前没有待处理的发现'}</div>
+              <div className="text-[var(--text-mute)] text-[13px]">{findings.length ? t('diag.filterEmpty') : t('diag.empty')}</div>
             </div>
           )}
         </div>
 
         {/* 根因卡 */}
         <div className="lg:col-span-8">
-          {!current && <div className="card p-12 text-center text-[var(--text-faint)]">选择左侧发现查看诊断详情</div>}
+          {!current && <div className="card p-12 text-center text-[var(--text-faint)]">{t('diag.selectHint')}</div>}
           {current && (
             <div key={current.id} className="card p-6 rise-in">
               {/* 头部 */}
               <div className="flex items-start gap-3 flex-wrap">
-                <span className="pill shrink-0" style={SEV_STYLE(current.severity)}>{SEV[current.severity].label}</span>
+                <span className="pill shrink-0" style={SEV_STYLE(current.severity)}>{t(`sev.${current.severity}`)}</span>
                 <div className="min-w-0 flex-1">
                   <h2 className="font-bold text-[16.5px] text-[var(--text-hi)] leading-snug">{current.title}</h2>
                   <div className="text-[11.5px] text-[var(--text-faint)] mt-1 num">
-                    {current.host_name} · 发现于 {fmtTime(current.ts)}
+                    {current.host_name} · {t('diag.foundAt', { time: fmtTime(current.ts) })}
                   </div>
                 </div>
                 {current.status === 'open' && (
                   <button disabled={busy} onClick={() => analyze(current.id)} className="btn btn-primary ml-auto shrink-0">
-                    {busy ? <><span className="pulse-dot" style={{ background: 'var(--accent)' }} /> 诊断中…</> : <><Ic name="play" size={13} /> Agent 深挖诊断</>}
+                    {busy ? <><span className="pulse-dot" style={{ background: 'var(--accent)' }} /> {t('diag.analyzing')}</> : <><Ic name="play" size={13} /> {t('diag.deepDive')}</>}
                   </button>
                 )}
                 {current.status !== 'resolved' && !current.acked_at && (
-                  <button disabled={busy} title="已知悉此告警：停止持续告警重发"
+                  <button disabled={busy} title={t('diag.ackTitle')}
                     onClick={() => api(`/findings/${current.id}/ack`, { method: 'POST' }).then(load).catch(() => { /* noop */ })}
                     className="btn shrink-0" style={{ background: 'var(--neutral-bg)', color: 'var(--text-mute)' }}>
-                    <Ic name="check-circle" size={13} /> 确认
+                    <Ic name="check-circle" size={13} /> {t('btn.confirm')}
                   </button>
                 )}
                 {current.acked_at ? (
                   <span className="pill shrink-0" style={{ background: 'var(--neutral-bg)', color: 'var(--text-mute)' }}>
-                    ✓ 已确认（不重发）
+                    {t('diag.acked')}
                   </span>
                 ) : null}
               </div>
@@ -207,7 +211,7 @@ export default function Diagnostics() {
                                   : { background: isDone ? 'var(--ok-bg)' : 'var(--neutral-bg)', color }}>
                                 {isDone && !isActive ? '✓' : i + 1}
                               </span>
-                              <span className="text-[10px] whitespace-nowrap" style={{ color: isActive ? 'var(--accent)' : isDone ? 'var(--text-mute)' : 'var(--text-faint)' }}>{s}</span>
+                              <span className="text-[10px] whitespace-nowrap" style={{ color: isActive ? 'var(--accent)' : isDone ? 'var(--text-mute)' : 'var(--text-faint)' }}>{t(s)}</span>
                             </div>
                             {i < STAGES.length - 1 && (
                               <div className="h-0.5 flex-1 rounded-full -mt-4"
@@ -217,7 +221,7 @@ export default function Diagnostics() {
                         )
                       })}
                     </div>
-                    {blocked && <div className="text-[10.5px] text-[var(--text-faint)] mt-2.5">提案被拒绝 — 流程在该阶段终止，可重新发起诊断</div>}
+                    {blocked && <div className="text-[10.5px] text-[var(--text-faint)] mt-2.5">{t('diag.pipelineBlocked')}</div>}
                   </div>
                 )
               })()}
@@ -228,10 +232,10 @@ export default function Diagnostics() {
                   <div className="mt-4 rounded-xl p-4" style={{ background: 'var(--accent-dim)', border: '1px solid var(--accent-border)' }}>
                     <div className="flex items-center justify-between mb-2">
                       <div className="text-[11px] font-semibold tracking-wide flex items-center gap-1.5" style={{ color: 'var(--accent)' }}>
-                        <Ic name="search" size={12} sw={2.4} /> 根因分析
+                        <Ic name="search" size={12} sw={2.4} /> {t('diag.rootCause')}
                       </div>
                       <span className="pill" style={{ background: 'var(--ok-bg)', color: 'var(--ok)', fontSize: 10.5 }}>
-                        置信度 {current.card.confidence}
+                        {t('diag.confidence', { n: CONF_KEY[current.card.confidence] ? t(CONF_KEY[current.card.confidence]) : current.card.confidence })}
                       </span>
                     </div>
                     <div className="text-[13.5px] leading-relaxed text-[var(--text-hi)]">{current.card.root_cause}</div>
@@ -255,18 +259,18 @@ export default function Diagnostics() {
                     <div className="mt-3 rounded-xl p-4" style={{ background: 'var(--violet-bg)', border: '1px solid var(--violet-border)' }}>
                       <div className="flex items-center gap-2 mb-1.5">
                         <span className="pill text-[10.5px] flex items-center gap-1" style={{ background: 'var(--violet-strong-bg)', color: 'var(--violet)' }}>
-                          <Ic name="sparkles" size={10} /> AI 叙事
+                          <Ic name="sparkles" size={10} /> {t('diag.aiNarrative')}
                         </span>
                         {current.card.ai_model && (
                           <span className="text-[10.5px] text-[var(--text-faint)] mono">{current.card.ai_model}</span>
                         )}
-                        <span className="ml-auto text-[10px] text-[var(--text-faint)]">附加视角 · 不替代规则引擎结论</span>
+                        <span className="ml-auto text-[10px] text-[var(--text-faint)]">{t('diag.aiNote')}</span>
                       </div>
                       {current.card.ai_narration ? (
                         <div className="text-[13px] leading-relaxed text-[var(--text-hi)]">{current.card.ai_narration}</div>
                       ) : (
                         <div className="text-[12px] leading-relaxed text-[var(--text-mute)]">
-                          AI 生成失败，规则引擎结论不受影响：<span className="mono text-[11px]">{current.card.ai_error}</span>
+                          {t('diag.aiFailed')}<span className="mono text-[11px]">{current.card.ai_error}</span>
                         </div>
                       )}
                     </div>
@@ -275,7 +279,7 @@ export default function Diagnostics() {
                   {/* 证据链 */}
                   <div className="mt-5">
                     <div className="text-[11px] text-[var(--text-faint)] mb-2.5 font-medium flex items-center gap-1.5">
-                      <Ic name="terminal" size={12} /> Agent 执行轨迹 · 每步命令与输出可展开（证据链）
+                      <Ic name="terminal" size={12} /> {t('diag.traceHead')}
                     </div>
                     <div className="space-y-2">
                       {current.card.steps.map((s, i) => (
@@ -289,7 +293,7 @@ export default function Diagnostics() {
                             <span className="w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold num shrink-0"
                               style={{ background: 'rgba(34,211,238,.15)', color: 'var(--accent)' }}>{i + 1}</span>
                             <span className="text-[12.5px]" style={{ color: '#dbe7f5' }}>{s.label}</span>
-                            <span className="ml-auto text-[10px]" style={{ color: '#5a6a85' }}>{openStep === i ? '▾ 收起' : '▸ 展开输出'}</span>
+                            <span className="ml-auto text-[10px]" style={{ color: '#5a6a85' }}>{openStep === i ? t('diag.collapse') : t('diag.expand')}</span>
                           </button>
                           {/* 始终渲染、仅切 class —— 才能触发 0fr→1fr 过渡 */}
                           <div className={`acc-body ${openStep === i ? 'open' : ''}`}><div>
@@ -307,7 +311,7 @@ export default function Diagnostics() {
                           </div></div>
                         </div>
                       ))}
-                      {!current.card.steps.length && <div className="text-[12px] text-[var(--text-faint)] px-1">（演示主机使用内置证据）</div>}
+                      {!current.card.steps.length && <div className="text-[12px] text-[var(--text-faint)] px-1">{t('diag.demoEvidence')}</div>}
                     </div>
                   </div>
                 </>
@@ -316,16 +320,16 @@ export default function Diagnostics() {
               {(() => {
                 const p = proposalOf(current.id)
                 if (!p) return current.status === 'open' ? null : (
-                  <div className="mt-5 text-[12px] text-[var(--text-faint)]">此发现类型暂无预置修复提案</div>
+                  <div className="mt-5 text-[12px] text-[var(--text-faint)]">{t('diag.noProposal')}</div>
                 )
                 return (
                   <div className="mt-5 rounded-xl p-4" style={{ background: 'var(--violet-bg)', border: '1px solid var(--violet-border)' }}>
                     <div className="flex items-center gap-2.5 flex-wrap">
-                      <span className="pill" style={{ background: 'var(--violet-strong-bg)', color: 'var(--violet)' }}>修复提案 #{p.id}</span>
+                      <span className="pill" style={{ background: 'var(--violet-strong-bg)', color: 'var(--violet)' }}>{t('diag.proposalTag', { n: p.id })}</span>
                       <span className="text-[13.5px] font-semibold text-[var(--text-hi)]">{p.title}</span>
                       <span className={`ml-auto text-[11.5px] font-medium ${
                         p.status === 'pending' ? 'text-[var(--text-faint)]' : p.status === 'approved' ? 'text-[var(--ok)]' : 'text-[var(--text-faint)]'}`}>
-                        {p.status === 'pending' ? '⏳ 待审批' : p.status === 'approved' ? '✓ 已批准' : '✕ 已拒绝'}
+                        {p.status === 'pending' ? t('diag.propState.pending') : p.status === 'approved' ? t('diag.propState.approved') : t('diag.propState.rejected')}
                       </span>
                     </div>
                     <div className="text-[12px] text-[var(--text-mute)] mt-2.5 leading-relaxed">{p.rationale}</div>
@@ -339,35 +343,35 @@ export default function Diagnostics() {
                       <button onClick={() => copyCmd(p.command)}
                         className="absolute top-2 right-2 text-[10.5px] px-2 py-1 rounded-md opacity-0 group-hover:opacity-100 transition-opacity"
                         style={{ background: '#1b2740', border: '1px solid #2c3d5e', color: copied ? 'var(--ok)' : '#8fa3bd' }}>
-                        {copied ? '✓ 已复制' : '复制'}
+                        {copied ? t('diag.copied') : t('btn.copy')}
                       </button>
                     </div>
                     {p.status === 'pending' && (
                       <div className="flex gap-2.5 mt-3.5 flex-wrap">
-                        <button disabled={busy} onClick={() => decide(p.id, 'approve')} className="btn btn-ok">✓ 批准执行</button>
-                        <button disabled={busy} onClick={() => decide(p.id, 'reject')} className="btn btn-ghost">✕ 拒绝</button>
-                        <span className="text-[10.5px] text-[var(--text-faint)] self-center">演示环境：批准仅记录决策，不实际执行命令</span>
+                        <button disabled={busy} onClick={() => decide(p.id, 'approve')} className="btn btn-ok">{t('diag.approve')}</button>
+                        <button disabled={busy} onClick={() => decide(p.id, 'reject')} className="btn btn-ghost">{t('diag.reject')}</button>
+                        <span className="text-[10.5px] text-[var(--text-faint)] self-center">{t('diag.demoApproveNote')}</span>
                       </div>
                     )}
                     {p.status === 'approved' && (
                       <div className="mt-3.5 flex items-center gap-2.5 flex-wrap">
                         <button disabled={busy} onClick={() => execute(p.id)} className="btn btn-primary">
-                          {busy ? <><span className="pulse-dot" style={{ background: 'var(--accent)' }} /> 执行中…</> : <><Ic name="play" size={13} /> 现在执行（白名单校验 + 审计）</>}
+                          {busy ? <><span className="pulse-dot" style={{ background: 'var(--accent)' }} /> {t('diag.executing')}</> : <><Ic name="play" size={13} /> {t('diag.executeNow')}</>}
                         </button>
                         <span className="text-[10.5px] text-[var(--text-faint)]">
-                          已批准 · 执行是独立动作，逐段白名单校验，mock 主机在模拟环境生效{!p.exec_enabled && ' · 当前执行开关未开启（设置页打开）'}
+                          {t('diag.approvedNote')}{!p.exec_enabled && t('diag.execDisabledNote')}
                         </span>
                       </div>
                     )}
                     {!!p.runs?.length && (
                       <div className="mt-3.5 space-y-2">
-                        <div className="text-[10.5px] text-[var(--text-faint)] font-medium">执行审计 · 每次尝试（含被拦截/超时）均留痕</div>
+                        <div className="text-[10.5px] text-[var(--text-faint)] font-medium">{t('diag.auditHead')}</div>
                         {p.runs.map(r => (
                           <div key={r.id} className="rounded-lg p-2.5" style={{ background: 'var(--term-bg)', border: '1px solid #223049' }}>
                             <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-                              <span className="pill text-[10px]" style={RUN_STYLE(r.status)}>{RUN_LABEL[r.status] ?? r.status}</span>
-                              <span className="text-[10px] text-[var(--text-faint)] mono">{r.mode === 'mock' ? '模拟环境' : 'SSH'}</span>
-                              {r.risk && <span className="text-[10px] text-[var(--text-faint)]">风险 {r.risk}</span>}
+                              <span className="pill text-[10px]" style={RUN_STYLE(r.status)}>{RUN_LABEL[r.status] ? t(RUN_LABEL[r.status]) : r.status}</span>
+                              <span className="text-[10px] text-[var(--text-faint)] mono">{r.mode === 'mock' ? t('diag.run.modeMock') : 'SSH'}</span>
+                              {r.risk && <span className="text-[10px] text-[var(--text-faint)]">{t('diag.run.risk', { n: r.risk })}</span>}
                               <span className="ml-auto text-[10px] text-[var(--text-faint)] num">{fmtTime(r.ts).slice(5, 16)} · {r.duration_ms}ms</span>
                             </div>
                             <pre className="text-[11px] mono whitespace-pre-wrap leading-relaxed" style={{ color: '#8fa3bd', margin: 0 }}>{r.output}</pre>

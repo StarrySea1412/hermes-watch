@@ -4,37 +4,41 @@ import { PageHead } from '../ui'
 import { Ic } from '../icons'
 import { UserAdd } from './UserAdd'
 import { SectionNav, SectionRail, SectionHead } from './SectionNav'
+import { useT } from '../i18n'
 
-const THRESHOLD_FIELDS: { key: string; label: string; hint: string }[] = [
-  { key: 'disk_warn', label: '磁盘警告 %', hint: '默认 85' },
-  { key: 'disk_crit', label: '磁盘严重 %', hint: '默认 95' },
-  { key: 'mem_warn', label: '内存警告 %', hint: '默认 85' },
-  { key: 'mem_crit', label: '内存严重 %', hint: '默认 92' },
-  { key: 'cpu_warn', label: 'CPU 警告 %', hint: '默认 85' },
-  { key: 'load_warn', label: 'load1 警告', hint: '默认 8.0' },
-  { key: 'cert_days', label: '证书剩余天数', hint: '默认 14' },
-  { key: 'io_warn', label: '磁盘写入 KB/s', hint: '默认 80000' },
-  { key: 'temp_warn', label: '温度警告 °C', hint: '默认 80' },
-  { key: 'swap_warn', label: 'Swap 警告 %', hint: '默认 70' },
+type TFn = (key: string, vars?: Record<string, string | number>) => string
+
+const THRESHOLD_FIELDS: { key: string; label: string; hint: string; def: string }[] = [
+  { key: 'disk_warn', label: 'st.thresh.diskWarn', hint: 'st.thresh.def', def: '85' },
+  { key: 'disk_crit', label: 'st.thresh.diskCrit', hint: 'st.thresh.def', def: '95' },
+  { key: 'mem_warn', label: 'st.thresh.memWarn', hint: 'st.thresh.def', def: '85' },
+  { key: 'mem_crit', label: 'st.thresh.memCrit', hint: 'st.thresh.def', def: '92' },
+  { key: 'cpu_warn', label: 'st.thresh.cpuWarn', hint: 'st.thresh.def', def: '85' },
+  { key: 'load_warn', label: 'st.thresh.loadWarn', hint: 'st.thresh.def', def: '8.0' },
+  { key: 'cert_days', label: 'st.thresh.certDays', hint: 'st.thresh.def', def: '14' },
+  { key: 'io_warn', label: 'st.thresh.ioWarn', hint: 'st.thresh.def', def: '80000' },
+  { key: 'temp_warn', label: 'st.thresh.tempWarn', hint: 'st.thresh.def', def: '80' },
+  { key: 'swap_warn', label: 'st.thresh.swapWarn', hint: 'st.thresh.def', def: '70' },
 ]
 
 const THRESH_KEYS = THRESHOLD_FIELDS.map(f => f.key)
 
 const NOTIFY_LABELS: Record<string, string> = {
-  wecom: '企业微信', dingtalk: '钉钉', feishu: '飞书',
-  telegram: 'Telegram', serverchan: 'Server酱', webhook: '通用 Webhook',
+  wecom: 'st.notify.chWecom', dingtalk: 'st.notify.chDingtalk', feishu: 'st.notify.chFeishu',
+  telegram: 'st.notify.chTelegram', serverchan: 'st.notify.chServerchan', webhook: 'st.notify.chWebhook',
 }
 
 // ---------- 设置页分区导航 ----------
-const SECTIONS = [
-  { id: 'sec-inspect', label: '巡检与告警', icon: 'activity' as const },
-  { id: 'sec-ai', label: 'AI 外发', icon: 'sparkles' as const },
-  { id: 'sec-notify', label: '通知与分享', icon: 'bell' as const },
-  { id: 'sec-hosts', label: '主机与接入', icon: 'server' as const },
-  { id: 'sec-security', label: '安全与用户', icon: 'shield' as const },
-] as const
+const SECTIONS = (t: TFn) => [
+  { id: 'sec-inspect', label: t('st.sec.inspect'), icon: 'activity' as const },
+  { id: 'sec-ai', label: t('st.sec.ai'), icon: 'sparkles' as const },
+  { id: 'sec-notify', label: t('st.sec.notify'), icon: 'bell' as const },
+  { id: 'sec-hosts', label: t('st.sec.hosts'), icon: 'server' as const },
+  { id: 'sec-security', label: t('st.sec.security'), icon: 'shield' as const },
+]
 
 export default function Settings() {
+  const { t } = useT()
   const [hosts, setHosts] = useState<Host[]>([])
   const [settings, setSettings] = useState<Record<string, string>>({})
   const [form, setForm] = useState({ name: '', hostname: '', username: 'root', secret: '', group_name: 'default' })
@@ -67,6 +71,7 @@ export default function Settings() {
   const [users, setUsers] = useState<any[]>([])
   const [legacyPw, setLegacyPw] = useState(true)
   const notifyLabels = NOTIFY_LABELS
+  const sections = SECTIONS(t)
 
   const load = () => Promise.all([
     api<{ hosts: Host[] }>('/fleet').then(d => setHosts(d.hosts)),
@@ -78,9 +83,9 @@ export default function Settings() {
       setNotifyChatId(s.telegram_chat_id || '')
       setNotifyQuiet(s.quiet_hours || '')
       setNotifyResend(s.notify_resend_min ?? '0')
-      const t: Record<string, string> = {}
-      for (const k of THRESH_KEYS) t[k] = s[k] ?? ''
-      setTh(t)
+      const tv: Record<string, string> = {}
+      for (const k of THRESH_KEYS) tv[k] = s[k] ?? ''
+      setTh(tv)
     }),
     api<any[]>('/notify/log?limit=8').then(setNotifyLog).catch(() => { /* 留痕失败不打断 */ }),
     api<{ enabled: boolean; token: string }>('/status/token')
@@ -97,13 +102,13 @@ export default function Settings() {
   const add = async () => {
     try {
       await api('/hosts', { method: 'POST', body: JSON.stringify(form) })
-      setMsg(`✓ 已添加 ${form.name}，下一轮巡检（≤60s）开始采集`)
+      setMsg(t('st.hosts.added', { n: form.name }))
       setForm({ name: '', hostname: '', username: 'root', secret: '', group_name: 'default' })
       load()
     } catch (e: any) { setMsg(`✕ ${e.message}`) }
   }
   const del = async (h: Host) => {
-    if (!confirm(`删除主机 ${h.name}？其全部指标/发现/提案/事件将一并删除，不可恢复。`)) return
+    if (!confirm(t('st.hosts.delConfirm', { n: h.name }))) return
     await api(`/hosts/${h.id}`, { method: 'DELETE' }); load()
   }
   const saveProvider = (patch: any) => {
@@ -129,7 +134,7 @@ export default function Settings() {
     try {
       const r = await api<any>('/llm/models', { method: 'POST', body: JSON.stringify({ base_url: provider.base_url ?? '', api_key: provider.api_key ?? '' }) })
       setModels(r.models ?? [])
-      setModelsMsg(r.ok ? `✓ 拉取到 ${r.models.length} 个模型` : `✕ ${r.error}`)
+      setModelsMsg(r.ok ? t('st.ai.fetched', { n: r.models.length }) : `✕ ${r.error}`)
     } catch (e: any) { setModelsMsg(`✕ ${e.message}`) }
     setFetching(false)
   }
@@ -139,15 +144,15 @@ export default function Settings() {
     setCsOpen(true); setCsLoading(true); setCsMsg(''); setCsList([])
     api<{ found: boolean; reason: string; providers: any[] }>('/llm/ccswitch')
       .then(r => { setCsList(r.providers ?? []); if (r.reason) setCsMsg(r.reason) })
-      .catch(e => setCsMsg(`读取失败: ${e.message}`))
+      .catch(e => setCsMsg(t('st.cs.readFail', { err: e.message })))
       .finally(() => setCsLoading(false))
   }
   const applyCs = (p: any) => {
     const next = { base_url: p.base_url, model: p.model ?? '', api_key: p.api_key ?? '' }
     setProvider((prev: any) => ({ ...prev, ...next }))
     api('/llm/ccswitch/apply', { method: 'POST', body: JSON.stringify({ ...p }) })
-      .then(() => { setCsOpen(false); setModelsMsg(`✓ 已导入「${p.name}」，可用「连通测活」验证`) })
-      .catch(e => setCsMsg(`应用失败: ${e.message}`))
+      .then(() => { setCsOpen(false); setModelsMsg(t('st.ai.imported', { n: p.name })) })
+      .catch(e => setCsMsg(t('st.cs.applyFail', { err: e.message })))
   }
   const testLlm = async () => {
     setTesting(true); setTestRes(null)
@@ -162,42 +167,42 @@ export default function Settings() {
   return (
     <div className="fade-in max-w-6xl xl:flex xl:gap-8 xl:items-start">
       <div className="flex-1 min-w-0">
-      <PageHead title="设置" sub="巡检告警 · AI 外发 · 通知分享 · 主机接入 · 安全用户" />
+      <PageHead title={t('nav.settings')} sub={t('st.subtitle')} />
       <div className="xl:hidden mb-1">
-        <SectionNav sections={SECTIONS} />
+        <SectionNav sections={sections} />
       </div>
 
       <section>
-      <SectionHead id="sec-inspect" icon="activity" label="巡检与告警" />
+      <SectionHead id="sec-inspect" icon="activity" label={t('st.sec.inspect')} />
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* 告警阈值 */}
         <div className="card p-5">
           <div className="flex items-center justify-between mb-1">
-            <h3 className="font-semibold text-[14.5px] text-[var(--text-hi)]">告警阈值</h3>
-            <span className="text-[10.5px] text-[var(--text-faint)]">留空 = 使用默认值</span>
+            <h3 className="font-semibold text-[14.5px] text-[var(--text-hi)]">{t('st.thresh.title')}</h3>
+            <span className="text-[10.5px] text-[var(--text-faint)]">{t('st.thresh.leaveEmpty')}</span>
           </div>
-          <p className="text-[12px] text-[var(--text-faint)] mb-3.5">规则引擎先于一切 AI 生效，阈值改完立即作用于下一轮巡检</p>
+          <p className="text-[12px] text-[var(--text-faint)] mb-3.5">{t('st.thresh.desc')}</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
             {THRESHOLD_FIELDS.map(f => (
               <div key={f.key}>
                 <div className="flex justify-between text-[11px] text-[var(--text-faint)] mb-1">
-                  <span>{f.label}</span><span>{f.hint}</span>
+                  <span>{t(f.label)}</span><span>{t(f.hint, { n: f.def })}</span>
                 </div>
-                <input className="input num" inputMode="decimal" placeholder={f.hint.replace('默认 ', '')}
+                <input className="input num" inputMode="decimal" placeholder={f.def}
                   value={th[f.key] ?? ''} onChange={e => setTh({ ...th, [f.key]: e.target.value })} />
               </div>
             ))}
           </div>
           <div className="flex items-center gap-2.5 mt-3.5">
-            <button className="btn btn-primary" onClick={saveThresholds}>{thSaved ? '✓ 已保存' : '保存阈值'}</button>
-            <span className="text-[11px] text-[var(--text-faint)]">巡检周期 <input className="input num inline-block text-center"
+            <button className="btn btn-primary" onClick={saveThresholds}>{thSaved ? t('st.thresh.saved') : t('st.thresh.save')}</button>
+            <span className="text-[11px] text-[var(--text-faint)]">{t('st.thresh.pollBefore')} <input className="input num inline-block text-center"
               style={{ width: 64, padding: '4px 6px' }} value={settings.poll_seconds ?? '60'}
               onChange={e => setSettings({ ...settings, poll_seconds: e.target.value })}
-              onBlur={() => saveSetting('poll_seconds', settings.poll_seconds ?? '60')} /> 秒</span>
-            <span className="text-[11px] text-[var(--text-faint)]">事件保留 <input className="input num inline-block text-center"
+              onBlur={() => saveSetting('poll_seconds', settings.poll_seconds ?? '60')} /> {t('st.thresh.seconds')}</span>
+            <span className="text-[11px] text-[var(--text-faint)]">{t('st.thresh.retentionBefore')} <input className="input num inline-block text-center"
               style={{ width: 56, padding: '4px 6px' }} value={settings.events_retention_days ?? '30'}
               onChange={e => setSettings({ ...settings, events_retention_days: e.target.value })}
-              onBlur={() => saveSetting('events_retention_days', settings.events_retention_days ?? '30')} /> 天</span>
+              onBlur={() => saveSetting('events_retention_days', settings.events_retention_days ?? '30')} /> {t('st.thresh.days')}</span>
           </div>
         </div>
 
@@ -205,17 +210,16 @@ export default function Settings() {
         <div className="card p-5">
             <div className="flex items-start justify-between">
               <div>
-                <h3 className="font-semibold text-[14.5px] text-[var(--text-hi)]">提案执行</h3>
+                <h3 className="font-semibold text-[14.5px] text-[var(--text-hi)]">{t('st.exec.title')}</h3>
                 <p className="text-[12px] text-[var(--text-faint)] mt-1.5 leading-relaxed">
-                  已批准的修复提案可由人工显式触发执行。命令逐段过白名单，mock 主机在模拟环境生效，
-                  每次尝试（含被拦截/超时）均写入审计。默认关闭。
+                  {t('st.exec.desc')}
                 </p>
               </div>
               <button onClick={() => saveSetting('propose_exec', execOn ? 'off' : 'on')}
                 className="btn shrink-0" style={execOn
                   ? { background: 'var(--ok-bg)', color: 'var(--ok)', borderColor: 'var(--ok-border)' }
                   : { background: 'var(--neutral-bg)', color: 'var(--text-mute)', borderColor: 'var(--border)' }}>
-                {execOn ? '● 允许执行' : '○ 已关闭'}
+                {execOn ? t('st.exec.allow') : t('st.state.off')}
               </button>
             </div>
         </div>
@@ -223,16 +227,16 @@ export default function Settings() {
           <div className="card p-5">
             <div className="flex items-start justify-between">
               <div>
-                <h3 className="font-semibold text-[14.5px] text-[var(--text-hi)]">定时健康报告</h3>
+                <h3 className="font-semibold text-[14.5px] text-[var(--text-hi)]">{t('st.report.title')}</h3>
                 <p className="text-[12px] text-[var(--text-faint)] mt-1.5 leading-relaxed">
-                  每 N 分钟自动生成一份 Fleet 健康报告，进报告中心与事件流。0 = 关闭。
+                  {t('st.report.desc')}
                 </p>
               </div>
               <button onClick={() => saveSetting('auto_report_min', autoReportOn ? '0' : '30')}
                 className="btn shrink-0" style={autoReportOn
                   ? { background: 'var(--ok-bg)', color: 'var(--ok)', borderColor: 'var(--ok-border)' }
                   : { background: 'var(--neutral-bg)', color: 'var(--text-mute)', borderColor: 'var(--border)' }}>
-                {autoReportOn ? `● 每 ${settings.auto_report_min} 分钟` : '○ 已关闭'}
+                {autoReportOn ? t('st.report.everyN', { n: settings.auto_report_min }) : t('st.state.off')}
               </button>
             </div>
           </div>
@@ -240,29 +244,27 @@ export default function Settings() {
       </section>
 
       <section>
-      <SectionHead id="sec-ai" icon="sparkles" label="AI 外发" />
+      <SectionHead id="sec-ai" icon="sparkles" label={t('st.sec.ai')} />
       <div className="card p-5 mt-4">
         <div className="flex items-start justify-between">
           <div>
             <div className="flex items-center gap-2.5">
-              <h3 className="font-semibold text-[14.5px] text-[var(--text-hi)]">AI 外发总开关</h3>
+              <h3 className="font-semibold text-[14.5px] text-[var(--text-hi)]">{t('st.ai.masterTitle')}</h3>
               <span className="pill" style={aiOn
                 ? { background: 'var(--ok-bg)', color: 'var(--ok)' }
                 : { background: 'var(--neutral-bg)', color: 'var(--text-mute)' }}>
-                {aiOn ? '● 已开启' : '○ 已关闭'}
+                {aiOn ? t('st.state.on') : t('st.state.off')}
               </span>
             </div>
             <p className="text-[12px] text-[var(--text-faint)] mt-1.5 leading-relaxed max-w-3xl">
-              开启后诊断摘要发送到 LLM 生成叙事，AI 只补充视角、不覆盖规则引擎结论。
-              关闭时全部结论由本地规则引擎产生，<b className="text-[var(--text-mute)]">数据不出本机</b>。
-              兼容任意 OpenAI 协议端点（Ollama / vLLM / one-api / 云厂商），API Key 可空（本地端点无需鉴权）。
+              {t('st.ai.descA')}<b className="text-[var(--text-mute)]">{t('st.ai.localOnly')}</b>{t('st.ai.descB')}
             </p>
           </div>
           <button onClick={() => saveSetting('ai_outbound', aiOn ? 'off' : 'on')}
             className="btn shrink-0" style={aiOn
               ? { background: 'var(--ok-bg)', color: 'var(--ok)', borderColor: 'var(--ok-border)' }
               : { background: 'var(--neutral-bg)', color: 'var(--text-mute)', borderColor: 'var(--border)' }}>
-            {aiOn ? '● 已开启' : '○ 已关闭'}
+            {aiOn ? t('st.state.on') : t('st.state.off')}
           </button>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4">
@@ -273,7 +275,7 @@ export default function Settings() {
               onBlur={() => saveProvider({})} />
           </div>
           <div>
-            <div className="text-[11px] text-[var(--text-faint)] mb-1.5">模型</div>
+            <div className="text-[11px] text-[var(--text-faint)] mb-1.5">{t('st.ai.model')}</div>
             <input className="input mono" placeholder="qwen2.5:7b / deepseek-chat" list="llm-models" value={provider.model ?? ''}
               onChange={e => setProvider({ ...provider, model: e.target.value })}
               onBlur={() => saveProvider({})} />
@@ -282,34 +284,34 @@ export default function Settings() {
             </datalist>
           </div>
           <div>
-            <div className="text-[11px] text-[var(--text-faint)] mb-1.5">API Key（可空）</div>
+            <div className="text-[11px] text-[var(--text-faint)] mb-1.5">{t('st.ai.apiKey')}</div>
             <input className="input mono" placeholder="sk-…" type="password" value={provider.api_key ?? ''}
               onChange={e => setProvider({ ...provider, api_key: e.target.value })}
               onBlur={() => saveProvider({})} />
           </div>
         </div>
         <div className="flex items-center gap-2.5 mt-3.5 flex-wrap">
-          <button className="btn btn-primary" onClick={openCcSwitch} title="读取本机 cc-switch 的供应商配置，一键填入">
-            <Ic name="download" size={13} /> 从 cc-switch 导入
+          <button className="btn btn-primary" onClick={openCcSwitch} title={t('st.ai.importCsTitle')}>
+            <Ic name="download" size={13} /> {t('st.ai.importCs')}
           </button>
           <button className="btn" disabled={fetching || !provider.base_url} onClick={fetchModels}>
             {fetching
-              ? <>拉取中…</>
-              : <><Ic name={models.length ? 'refresh' : 'chevron-down'} size={13} /> {models.length ? '重新拉取模型' : '获取模型列表'}</>}
+              ? <>{t('st.ai.fetching')}</>
+              : <><Ic name={models.length ? 'refresh' : 'chevron-down'} size={13} /> {models.length ? t('st.ai.refetch') : t('st.ai.fetchList')}</>}
           </button>
           <button className="btn" disabled={testing || !provider.base_url} onClick={testLlm}>
-            {testing ? '测试中…' : <><Ic name="zap" size={13} /> 连通测活</>}
+            {testing ? t('st.ai.testing') : <><Ic name="zap" size={13} /> {t('st.ai.testAlive')}</>}
           </button>
           <button className="btn" style={settings.ai_anonymize === 'on'
             ? { background: 'var(--ok-bg)', color: 'var(--ok)', borderColor: 'var(--ok-border)' }
             : undefined}
             onClick={() => saveSetting('ai_anonymize', settings.ai_anonymize === 'on' ? 'off' : 'on')}>
-            {settings.ai_anonymize === 'on' ? '● 出站脱敏开' : '○ 出站脱敏关'}
+            {settings.ai_anonymize === 'on' ? t('st.ai.anonOn') : t('st.ai.anonOff')}
           </button>
           {models.length > 0 && (
             <select className="input mono" style={{ width: 'auto', padding: '6px 10px' }} value=""
               onChange={e => { if (e.target.value) saveProvider({ model: e.target.value }) }}>
-              <option value="">从 {models.length} 个模型中选择…</option>
+              <option value="">{t('st.ai.pickModel', { n: models.length })}</option>
               {models.map(m => <option key={m} value={m}>{m}</option>)}
             </select>
           )}
@@ -319,14 +321,15 @@ export default function Settings() {
           <div className="inset px-3 py-2.5 mt-3 text-[12px] mono" style={testRes.ok
             ? { color: 'var(--ok)' } : { color: 'var(--crit)' }}>
             {testRes.ok
-              ? `✓ 端点连通 · ${testRes.latency_ms}ms · HTTP ${testRes.status}${testRes.model ? ` · 模型 ${testRes.model}` : ''}${testRes.reply ? ` · 回复「${testRes.reply}」` : ''}`
-              : `✕ 测活失败：${testRes.error}${testRes.latency_ms ? ` · ${testRes.latency_ms}ms` : ''}`}
+              ? t('st.ai.testOk', { ms: testRes.latency_ms, status: testRes.status })
+                + (testRes.model ? t('st.ai.testOkModel', { n: testRes.model }) : '')
+                + (testRes.reply ? t('st.ai.testOkReply', { n: testRes.reply }) : '')
+              : t('st.ai.testFail', { err: testRes.error })
+                + (testRes.latency_ms ? t('st.ai.testFailMs', { ms: testRes.latency_ms }) : '')}
           </div>
         )}
         <p className="text-[11px] text-[var(--text-faint)] mt-3 leading-relaxed">
-          测活与诊断叙事走同一条 chat/completions 路径，通过即代表 AI 叙事可用。
-          出站脱敏开启时，主机名 / IP / 用户名在发给 LLM 前替换为占位符（k8sgpt 式 anonymize），
-          映射只在内存中、不落盘，回答再映射回真实名。本地试运行：py backend/mock_llm.py → Base URL 填 http://127.0.0.1:18777/v1
+          {t('st.ai.footnote')}
         </p>
       </div>
 
@@ -334,65 +337,65 @@ export default function Settings() {
 
       {/* ═══ ③ 通知与分享 ═══ */}
       <section>
-      <SectionHead id="sec-notify" icon="bell" label="通知与分享" />
+      <SectionHead id="sec-notify" icon="bell" label={t('st.sec.notify')} />
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">
         <div className="card p-5">
           <div className="flex items-center gap-2.5 mb-1.5">
-            <h3 className="font-semibold text-[14.5px] text-[var(--text-hi)]">公开状态页</h3>
+            <h3 className="font-semibold text-[14.5px] text-[var(--text-hi)]">{t('st.statusPage.title')}</h3>
             <span className="pill" style={statusTok
               ? { background: 'var(--ok-bg)', color: 'var(--ok)' }
               : { background: 'var(--neutral-bg)', color: 'var(--text-mute)' }}>
-              {statusTok ? '● 分享中' : '○ 未开启'}
+              {statusTok ? t('st.statusPage.sharing') : t('st.statusPage.off')}
             </span>
           </div>
           <p className="text-[12px] text-[var(--text-faint)] mb-3">
-            生成只读分享链接：健康概览 + 主机状态 + 待处理发现，每分钟自动刷新。不含主机地址、凭据与巡检证据。
+            {t('st.statusPage.desc')}
           </p>
           {statusTok ? (
             <div className="space-y-2.5">
               <div className="flex flex-col sm:flex-row gap-2.5">
                 <input className="input mono text-[11.5px]" readOnly value={`${location.protocol}//${location.host}/status/${statusTok}`} onFocus={e => e.target.select()} />
                 <button className="btn btn-primary shrink-0"
-                  onClick={() => navigator.clipboard.writeText(`${location.protocol}//${location.host}/status/${statusTok}`)}>复制链接</button>
+                  onClick={() => navigator.clipboard.writeText(`${location.protocol}//${location.host}/status/${statusTok}`)}>{t('st.statusPage.copyLink')}</button>
               </div>
               <div className="flex gap-2.5">
-                <a className="btn shrink-0" href={`/status/${statusTok}`} target="_blank" rel="noreferrer">预览 ↗</a>
-                <button className="btn btn-ghost shrink-0" title="旧链接立即失效"
-                  onClick={() => api<{ token: string }>('/status/token', { method: 'POST' }).then(r => setStatusTok(r.token))}><Ic name="refresh" size={12} /> 换新链接</button>
+                <a className="btn shrink-0" href={`/status/${statusTok}`} target="_blank" rel="noreferrer">{t('st.statusPage.preview')}</a>
+                <button className="btn btn-ghost shrink-0" title={t('st.statusPage.rotateTitle')}
+                  onClick={() => api<{ token: string }>('/status/token', { method: 'POST' }).then(r => setStatusTok(r.token))}><Ic name="refresh" size={12} /> {t('st.statusPage.rotate')}</button>
                 <button className="btn btn-ghost shrink-0" style={{ color: 'var(--crit)' }}
-                  onClick={() => api('/status/token', { method: 'DELETE' }).then(() => setStatusTok(''))}>关闭并撤销</button>
+                  onClick={() => api('/status/token', { method: 'DELETE' }).then(() => setStatusTok(''))}>{t('st.statusPage.revoke')}</button>
               </div>
             </div>
           ) : (
             <button className="btn btn-primary" onClick={() => api<{ token: string }>('/status/token', { method: 'POST' }).then(r => setStatusTok(r.token))}>
-              生成分享链接
+              {t('st.statusPage.generate')}
             </button>
           )}
         </div>
 
         <div className="card p-5">
           <div className="flex items-center gap-2.5 mb-1.5">
-            <h3 className="font-semibold text-[14.5px] text-[var(--text-hi)]">通知渠道</h3>
+            <h3 className="font-semibold text-[14.5px] text-[var(--text-hi)]">{t('st.notify.title')}</h3>
             <span className="pill" style={notifyUrl
               ? { background: 'var(--ok-bg)', color: 'var(--ok)' }
               : { background: 'var(--neutral-bg)', color: 'var(--text-mute)' }}>
-              {notifyUrl ? `● ${notifyLabels[notifyChannel] ?? notifyChannel}` : '○ 未配置'}
+              {notifyUrl ? `● ${t(notifyLabels[notifyChannel] ?? notifyChannel)}` : t('st.notify.notConfigured')}
             </span>
           </div>
           <p className="text-[12px] text-[var(--text-faint)] mb-3">
-            crit 发现 / 告警恢复 / 持续告警外呼推送；免打扰时段内只记事件不外呼
+            {t('st.notify.desc')}
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 mb-2.5">
             <div>
-              <div className="text-[11px] text-[var(--text-faint)] mb-1.5">渠道</div>
+              <div className="text-[11px] text-[var(--text-faint)] mb-1.5">{t('st.notify.channel')}</div>
               <select className="input" value={notifyChannel}
                 onChange={e => { setNotifyChannel(e.target.value); saveSetting('notify_channel', e.target.value) }}>
-                {Object.entries(notifyLabels).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                {Object.entries(notifyLabels).map(([k, v]) => <option key={k} value={k}>{t(v)}</option>)}
               </select>
             </div>
             <div>
               <div className="text-[11px] text-[var(--text-faint)] mb-1.5">
-                {notifyChannel === 'telegram' ? 'Bot Token' : notifyChannel === 'serverchan' ? 'SendKey' : 'Webhook 地址'}
+                {notifyChannel === 'telegram' ? 'Bot Token' : notifyChannel === 'serverchan' ? 'SendKey' : t('st.notify.webhookUrl')}
               </div>
               <input className="input mono" value={notifyUrl}
                 placeholder={notifyChannel === 'telegram' ? '123456:ABC-DEF…' : notifyChannel === 'serverchan' ? 'SCT…' : 'https://…webhook/send?key=…'}
@@ -401,20 +404,20 @@ export default function Settings() {
             </div>
             {notifyChannel === 'telegram' && (
               <div className="sm:col-span-2">
-                <div className="text-[11px] text-[var(--text-faint)] mb-1.5">Chat ID（把消息发给谁，@userinfobot 可查）</div>
+                <div className="text-[11px] text-[var(--text-faint)] mb-1.5">{t('st.notify.chatId')}</div>
                 <input className="input mono" placeholder="-100123456789" value={notifyChatId}
                   onChange={e => setNotifyChatId(e.target.value)}
                   onBlur={() => saveSetting('telegram_chat_id', notifyChatId)} />
               </div>
             )}
             <div>
-              <div className="text-[11px] text-[var(--text-faint)] mb-1.5">免打扰时段（可跨午夜，空 = 关闭）</div>
+              <div className="text-[11px] text-[var(--text-faint)] mb-1.5">{t('st.notify.quiet')}</div>
               <input className="input mono" placeholder="23:00-08:00" value={notifyQuiet}
                 onChange={e => setNotifyQuiet(e.target.value)}
                 onBlur={() => saveSetting('quiet_hours', notifyQuiet)} />
             </div>
             <div>
-              <div className="text-[11px] text-[var(--text-faint)] mb-1.5">crit 持续告警重发（分钟，0 = 关）</div>
+              <div className="text-[11px] text-[var(--text-faint)] mb-1.5">{t('st.notify.resend')}</div>
               <input className="input num" placeholder="0" value={notifyResend}
                 onChange={e => setNotifyResend(e.target.value)}
                 onBlur={() => saveSetting('notify_resend_min', notifyResend || '0')} />
@@ -423,23 +426,23 @@ export default function Settings() {
           <div className="flex items-center gap-2.5 mt-3.5">
             <button className="btn" disabled={!notifyUrl || testingNotify}
               onClick={() => { setTestingNotify(true); api('/notify/test', { method: 'POST' })
-                .then(() => setNotifyMsg('✓ 测试通知已发送，检查你的群/会话'))
+                .then(() => setNotifyMsg(t('st.notify.testSent')))
                 .catch(e => setNotifyMsg(`✕ ${e.message}`))
                 .finally(() => setTestingNotify(false)) }}>
-              {testingNotify ? '发送中…' : '发送测试通知'}
+              {testingNotify ? t('st.notify.sending') : t('st.notify.sendTest')}
             </button>
             {notifyMsg && <span className="text-[12px]" style={{ color: notifyMsg.startsWith('✓') ? 'var(--ok)' : 'var(--crit)' }}>{notifyMsg}</span>}
           </div>
           {notifyLog.length > 0 && (
             <div className="mt-3.5">
-              <div className="text-[11px] text-[var(--text-faint)] mb-1.5">最近发送记录（含失败与免打扰拦截）</div>
+              <div className="text-[11px] text-[var(--text-faint)] mb-1.5">{t('st.notify.recentLog')}</div>
               <div className="space-y-1">
                 {notifyLog.slice(0, 5).map(l => (
                   <div key={l.id} className="flex items-center gap-2 text-[11.5px]">
                     <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: l.ok ? 'var(--ok)' : 'var(--crit)' }} />
                     <span className="text-[var(--text-faint)] num w-14 shrink-0">{fmtTime(l.ts).slice(-8)}</span>
                     <span className="pill text-[10px] shrink-0" style={{ background: 'var(--neutral-bg)', color: 'var(--text-mute)' }}>
-                      {notifyLabels[l.channel] ?? l.channel}
+                      {t(notifyLabels[l.channel] ?? l.channel)}
                     </span>
                     <span className="text-[var(--text)] truncate">{l.kind}: {l.text}</span>
                     {!l.ok && l.error && <span className="text-[var(--crit)] shrink-0 truncate max-w-[160px]" title={l.error}>{l.error}</span>}
@@ -452,33 +455,33 @@ export default function Settings() {
 
         <div className="card p-5">
           <div className="flex items-center gap-2.5 mb-1.5">
-            <h3 className="font-semibold text-[14.5px] text-[var(--text-hi)]">本地 MCP 端点</h3>
-            <span className="pill" style={{ background: 'var(--violet-bg)', color: 'var(--violet)', fontSize: 10 }}>只读</span>
+            <h3 className="font-semibold text-[14.5px] text-[var(--text-hi)]">{t('st.mcp.title')}</h3>
+            <span className="pill" style={{ background: 'var(--violet-bg)', color: 'var(--violet)', fontSize: 10 }}>{t('st.mcp.readonly')}</span>
           </div>
-          <p className="text-[12px] text-[var(--text-faint)] mb-3">Claude Desktop / Cursor 等 MCP 客户端直查巡检数据，5 个只读工具</p>
+          <p className="text-[12px] text-[var(--text-faint)] mb-3">{t('st.mcp.desc')}</p>
           <div className="inset px-3 py-2.5">
             <code className="mono text-[12px]" style={{ color: 'var(--code-warn-text)' }}>
               {location.protocol}//{location.host}/api/mcp
             </code>
           </div>
-          <div className="text-[11px] text-[var(--text-faint)] mt-2.5">工具：fleet_status · list_findings · get_finding · host_history · recent_events</div>
+          <div className="text-[11px] text-[var(--text-faint)] mt-2.5">{t('st.mcp.tools')}fleet_status · list_findings · get_finding · host_history · recent_events</div>
         </div>
       </div>
 
       </section>
 
       <section>
-      <SectionHead id="sec-hosts" icon="server" label="主机与接入" />
+      <SectionHead id="sec-hosts" icon="server" label={t('st.sec.hosts')} />
       <div className="card p-5 mt-4">
         <div className="flex items-center justify-between mb-3">
-          <h3 className="font-semibold text-[14.5px] text-[var(--text-hi)]">主机清单</h3>
-          <a href="/enroll" className="text-[12px] text-[var(--accent)] hover:underline inline-flex items-center gap-1"><Ic name="zap" size={12} /> 出站 Agent 接入 →</a>
+          <h3 className="font-semibold text-[14.5px] text-[var(--text-hi)]">{t('st.hosts.title')}</h3>
+          <a href="/enroll" className="text-[12px] text-[var(--accent)] hover:underline inline-flex items-center gap-1"><Ic name="zap" size={12} /> {t('st.hosts.enrollLink')}</a>
         </div>
         <div className="mt-4 overflow-x-auto">
           <table className="w-full text-[13px]">
           <thead>
             <tr className="text-[11px] text-[var(--text-faint)] text-left border-b border-[var(--border)]">
-              <th className="py-2.5 font-medium">名称</th><th className="font-medium">地址</th><th className="font-medium">分组</th><th className="font-medium">类型</th><th className="font-medium">状态</th><th></th>
+              <th className="py-2.5 font-medium">{t('st.hosts.name')}</th><th className="font-medium">{t('st.hosts.addr')}</th><th className="font-medium">{t('st.hosts.group')}</th><th className="font-medium">{t('st.hosts.type')}</th><th className="font-medium">{t('st.hosts.status')}</th><th></th>
             </tr>
           </thead>
           <tbody>
@@ -493,28 +496,28 @@ export default function Settings() {
                   <span className="pill" style={h.mock
                     ? { background: 'var(--neutral-bg)', color: 'var(--text-mute)' }
                     : { background: 'var(--accent-dim)', color: 'var(--accent)' }}>
-                    {h.mock ? '演示' : 'SSH'}
+                    {h.mock ? t('st.hosts.mock') : 'SSH'}
                   </span>
                 </td>
                 <td>
                   {silenced
-                    ? <span className="pill" style={{ background: 'var(--warn-bg)', color: 'var(--warn)', fontSize: 10 }}>静默中</span>
+                    ? <span className="pill" style={{ background: 'var(--warn-bg)', color: 'var(--warn)', fontSize: 10 }}>{t('st.hosts.silenced')}</span>
                     : <span className="text-[11px] text-[var(--text-faint)]">—</span>}
                 </td>
                 <td className="text-right whitespace-nowrap">
                   <button className="text-[12px] text-[var(--text-faint)] hover:text-[var(--warn)] mr-3"
-                    title="N 分钟内不发送该主机的告警外呼"
+                    title={t('st.hosts.silenceTitle')}
                     onClick={() => {
-                      const v = prompt('静默多少分钟？（0 = 取消静默）', silenced ? '0' : '60')
+                      const v = prompt(t('st.hosts.silencePrompt'), silenced ? '0' : '60')
                       if (v === null) return
                       api(`/hosts/${h.id}/silence`, { method: 'POST', body: JSON.stringify({ minutes: Number(v) || 0 }) }).then(load)
-                    }}>{silenced ? '取消静默' : '静默'}</button>
+                    }}>{silenced ? t('st.hosts.unsilence') : t('st.hosts.silence')}</button>
                   {!h.mock && (
                     <button className="text-[12px] text-[var(--text-faint)] hover:text-[var(--accent)] mr-3"
-                      title="重置 SSH 主机指纹（TOFU）：主机重装系统后使用"
-                      onClick={() => api(`/hosts/${h.id}/trust-key`, { method: 'POST' }).then(load)}>重置指纹</button>
+                      title={t('st.hosts.trustTitle')}
+                      onClick={() => api(`/hosts/${h.id}/trust-key`, { method: 'POST' }).then(load)}>{t('st.hosts.resetFp')}</button>
                   )}
-                  {!h.mock && <button onClick={() => del(h)} className="text-[12px] text-[var(--text-faint)] hover:text-[var(--crit)]">删除</button>}
+                  {!h.mock && <button onClick={() => del(h)} className="text-[12px] text-[var(--text-faint)] hover:text-[var(--crit)]">{t('btn.delete')}</button>}
                 </td>
               </tr>
               )
@@ -523,17 +526,15 @@ export default function Settings() {
         </table>
         </div>
         <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 items-end">
-          <input className="input" placeholder="名称" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
-          <input className="input col-span-2 mono" placeholder="IP / 主机名" value={form.hostname} onChange={e => setForm({ ...form, hostname: e.target.value })} />
-          <input className="input" placeholder="用户" value={form.username} onChange={e => setForm({ ...form, username: e.target.value })} />
-          <input className="input" placeholder="密码（可空=密钥）" type="password" value={form.secret} onChange={e => setForm({ ...form, secret: e.target.value })} />
-          <button className="btn btn-primary justify-center" onClick={add}>＋ 添加主机</button>
+          <input className="input" placeholder={t('st.hosts.name')} value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
+          <input className="input col-span-2 mono" placeholder={t('st.hosts.phAddr')} value={form.hostname} onChange={e => setForm({ ...form, hostname: e.target.value })} />
+          <input className="input" placeholder={t('st.hosts.user')} value={form.username} onChange={e => setForm({ ...form, username: e.target.value })} />
+          <input className="input" placeholder={t('st.hosts.phSecret')} type="password" value={form.secret} onChange={e => setForm({ ...form, secret: e.target.value })} />
+          <button className="btn btn-primary justify-center" onClick={add}>{t('st.hosts.add')}</button>
         </div>
         {msg && <div className="text-[12px] mt-2.5 text-[var(--text-mute)]">{msg}</div>}
         <p className="text-[11px] text-[var(--text-faint)] mt-3 leading-relaxed">
-          真实主机走 SSH 只读探测（top / free / df / systemctl / last / openssl），需要网络可达且凭据正确。
-          机器在内网、无法 SSH？用 <a href="/enroll" className="text-[var(--accent)] hover:underline">出站 Agent</a> 主动上报。
-          演示主机数据由内置模拟器生成，用于故事复现。
+          {t('st.hosts.descA')}<a href="/enroll" className="text-[var(--accent)] hover:underline">{t('st.hosts.agentLink')}</a>{t('st.hosts.descB')}
         </p>
       </div>
 
@@ -541,52 +542,52 @@ export default function Settings() {
 
       {/* ═══ ⑤ 安全与用户 ═══ */}
       <section>
-      <SectionHead id="sec-security" icon="shield" label="安全与用户" />
+      <SectionHead id="sec-security" icon="shield" label={t('st.sec.security')} />
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
           <div className="card p-5">
             <div className="flex items-start justify-between">
               <div>
-                <h3 className="font-semibold text-[14.5px] text-[var(--text-hi)]">访问控制</h3>
+                <h3 className="font-semibold text-[14.5px] text-[var(--text-hi)]">{t('st.auth.title')}</h3>
                 <p className="text-[12px] text-[var(--text-faint)] mt-1.5 leading-relaxed">
-                  为面板加一道口令（PBKDF2 存储 + 签名 Cookie 会话）。出站 Agent 与本地 MCP 不受影响，各自走自己的通道。
+                  {t('st.auth.desc')}
                 </p>
               </div>
               <span className="pill shrink-0" style={authOn
                 ? { background: 'var(--ok-bg)', color: 'var(--ok)' }
                 : { background: 'var(--neutral-bg)', color: 'var(--text-mute)' }}>
-                {authOn ? '● 已开启' : '○ 已关闭'}
+                {authOn ? t('st.state.on') : t('st.state.off')}
               </span>
             </div>
             {!authOn && (
               <div className="flex flex-col sm:flex-row gap-2.5 mt-3.5">
-                <input className="input" type="password" placeholder="设置面板口令（≥4 位）" value={authPw}
+                <input className="input" type="password" placeholder={t('st.auth.phSet')} value={authPw}
                   onChange={e => setAuthPw(e.target.value)} />
                 <button className="btn btn-primary shrink-0" disabled={!authPw}
                   onClick={() => api('/auth/enable', { method: 'POST', body: JSON.stringify({ password: authPw }) })
-                    .then(() => { setAuthPw(''); setAuthMsg('✓ 已开启，下次访问需登录'); load() })
-                    .catch(e => setAuthMsg(`✕ ${e.message}`))}>启用</button>
+                    .then(() => { setAuthPw(''); setAuthMsg(t('st.auth.enabledMsg')); load() })
+                    .catch(e => setAuthMsg(`✕ ${e.message}`))}>{t('st.auth.enable')}</button>
               </div>
             )}
             {authOn && (
               <div className="mt-3.5 space-y-2.5">
                 <div className="flex flex-col sm:flex-row gap-2.5">
-                  <input className="input" type="password" placeholder="当前口令" value={authOld}
+                  <input className="input" type="password" placeholder={t('st.auth.phCurrent')} value={authOld}
                     onChange={e => setAuthOld(e.target.value)} />
-                  <input className="input" type="password" placeholder="新口令（≥4 位）" value={authPw}
+                  <input className="input" type="password" placeholder={t('st.auth.phNew')} value={authPw}
                     onChange={e => setAuthPw(e.target.value)} />
                   <button className="btn shrink-0" disabled={!authOld || !authPw}
                     onClick={() => api('/auth/change', { method: 'POST', body: JSON.stringify({ old: authOld, new: authPw }) })
-                      .then(() => { setAuthPw(''); setAuthOld(''); setAuthMsg('✓ 口令已更换') })
-                      .catch(e => setAuthMsg(`✕ ${e.message}`))}>修改口令</button>
+                      .then(() => { setAuthPw(''); setAuthOld(''); setAuthMsg(t('st.auth.changedMsg')) })
+                      .catch(e => setAuthMsg(`✕ ${e.message}`))}>{t('st.auth.change')}</button>
                 </div>
                 <div className="flex flex-col sm:flex-row gap-2.5">
-                  <button className="btn btn-ghost shrink-0" onClick={() => api('/auth/logout', { method: 'POST' }).then(() => { location.href = '/login' })}>退出登录</button>
-                  <input className="input" type="password" placeholder="输入当前口令以关闭访问控制" value={authOld}
+                  <button className="btn btn-ghost shrink-0" onClick={() => api('/auth/logout', { method: 'POST' }).then(() => { location.href = '/login' })}>{t('st.auth.logout')}</button>
+                  <input className="input" type="password" placeholder={t('st.auth.phDisable')} value={authOld}
                     onChange={e => setAuthOld(e.target.value)} />
                   <button className="btn shrink-0" disabled={!authOld}
                     onClick={() => api('/auth/disable', { method: 'POST', body: JSON.stringify({ password: authOld }) })
                       .then(() => { setAuthOld(''); setAuthPw(''); setAuthMsg(''); load() })
-                      .catch(e => setAuthMsg(`✕ ${e.message}`))}>关闭访问控制</button>
+                      .catch(e => setAuthMsg(`✕ ${e.message}`))}>{t('st.auth.disable')}</button>
                 </div>
               </div>
             )}
@@ -597,13 +598,13 @@ export default function Settings() {
           {authOn && authRole === 'admin' && (
             <div className="card p-5">
               <div className="flex items-center gap-2.5 mb-1.5">
-                <h3 className="font-semibold text-[14.5px] text-[var(--text-hi)]">用户管理</h3>
+                <h3 className="font-semibold text-[14.5px] text-[var(--text-hi)]">{t('st.users.title')}</h3>
                 <span className="pill" style={{ background: 'var(--accent-dim)', color: 'var(--accent)', fontSize: 10 }}>admin</span>
               </div>
               <p className="text-[12px] text-[var(--text-faint)] mb-3 leading-relaxed">
                 {legacyPw
-                  ? '当前仍是单口令模式：添加第一个用户后，面板口令登录自动停用，改为账号登录（现有口令保持可用直至删除该模式）。'
-                  : 'admin 可写（配置/审批/执行），observer 只读（看板/报告/终端，写操作被拒绝）。'}
+                  ? t('st.users.legacyDesc')
+                  : t('st.users.rolesDesc')}
               </p>
               <div className="space-y-1.5 mb-3">
                 {users.map(u => (
@@ -617,14 +618,14 @@ export default function Settings() {
                         onClick={() => {
                           const role = u.role === 'admin' ? 'observer' : 'admin'
                           api(`/auth/users/${u.id}/role`, { method: 'POST', body: JSON.stringify({ role }) }).then(load)
-                        }}>改为 {u.role === 'admin' ? 'observer' : 'admin'}</button>
+                        }}>{t('st.users.changeTo', { n: u.role === 'admin' ? 'observer' : 'admin' })}</button>
                       <button className="text-[11.5px] text-[var(--text-faint)] hover:text-[var(--crit)]"
-                        onClick={() => confirm(`删除用户 ${u.username}？`) &&
-                          api(`/auth/users/${u.id}`, { method: 'DELETE' }).then(load).catch(e => alert(e.message))}>删除</button>
+                        onClick={() => confirm(t('st.users.delConfirm', { n: u.username })) &&
+                          api(`/auth/users/${u.id}`, { method: 'DELETE' }).then(load).catch(e => alert(e.message))}>{t('btn.delete')}</button>
                     </div>
                   </div>
                 ))}
-                {!users.length && <div className="text-[11.5px] text-[var(--text-faint)]">还没有账号，添加第一个以启用多用户模式</div>}
+                {!users.length && <div className="text-[11.5px] text-[var(--text-faint)]">{t('st.users.empty')}</div>}
               </div>
               <UserAdd onAdded={load} />
             </div>
@@ -634,7 +635,7 @@ export default function Settings() {
           {authOn && authRole === 'observer' && (
             <div className="card p-4 mb-4 flex items-center gap-3" style={{ background: 'var(--warn-bg)', borderColor: 'var(--warn-border)' }}>
               <span style={{ color: 'var(--warn)' }}><Ic name="search" size={16} /></span>
-              <span className="text-[12.5px] text-[var(--text)]">你以 <b>observer（只读）</b>身份登录——面板可看，配置/审批/执行等写操作已禁用。</span>
+              <span className="text-[12.5px] text-[var(--text)]">{t('st.obs.prefix')} <b>{t('st.obs.role')}</b>{t('st.obs.suffix')}</span>
             </div>
           )}
       </div>
@@ -642,7 +643,7 @@ export default function Settings() {
       </section>
       </div>
 
-      <SectionRail sections={SECTIONS} />
+      <SectionRail sections={sections} />
 
       {/* cc-switch 一键导入弹窗 */}
       {csOpen && (
@@ -657,15 +658,15 @@ export default function Settings() {
                 <Ic name="download" size={16} />
               </div>
               <div>
-                <h3 className="font-semibold text-[15px] text-[var(--text-hi)]">从 cc-switch 导入</h3>
-                <p className="text-[11.5px] text-[var(--text-faint)]">只读本机 cc-switch 配置库 · 点击条目一键填入 · 总开关不会自动打开</p>
+                <h3 className="font-semibold text-[15px] text-[var(--text-hi)]">{t('st.ai.importCs')}</h3>
+                <p className="text-[11.5px] text-[var(--text-faint)]">{t('st.cs.modalDesc')}</p>
               </div>
               <button className="btn btn-ghost ml-auto shrink-0" onClick={() => setCsOpen(false)}>✕</button>
             </div>
             <div className="flex-1 overflow-y-auto space-y-1.5 mt-3 pr-1">
-              {csLoading && <div className="text-[12.5px] text-[var(--text-faint)] py-6 text-center">读取本机 cc-switch 配置库…</div>}
+              {csLoading && <div className="text-[12.5px] text-[var(--text-faint)] py-6 text-center">{t('st.cs.loading')}</div>}
               {!csLoading && !csList.length && (
-                <div className="text-[12.5px] text-[var(--text-faint)] py-6 text-center">{csMsg || '没有可导入的条目'}</div>
+                <div className="text-[12.5px] text-[var(--text-faint)] py-6 text-center">{csMsg || t('st.cs.empty')}</div>
               )}
               {csList.map((p, i) => (
                 <button key={`${p.base_url}-${i}`} onClick={() => applyCs(p)}

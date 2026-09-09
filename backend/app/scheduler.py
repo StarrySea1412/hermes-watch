@@ -11,7 +11,7 @@
 import asyncio
 import traceback
 
-from . import analysis, collector, db, notify, ports, rules
+from . import analysis, collector, db, i18n, notify, ports, rules
 
 POLL = 60
 _notify_broadcast = None  # set by main.py at startup to avoid a circular import
@@ -59,7 +59,9 @@ def _mark_ok(host_id: int) -> None:
         "SELECT kind, ts FROM events WHERE host_id=? ORDER BY id DESC LIMIT 1", (host_id,))
     if last and last["kind"] == "error" and db.now() - last["ts"] < _ERR_WINDOW * 6:
         db.execute("INSERT INTO events(ts,host_id,kind,message,data) VALUES(?,?,'ok',?,?)",
-                   (db.now(), host_id, "采集恢复，巡检数据恢复更新", db.j({"count": 1})))
+                   (db.now(), host_id,
+                    i18n.t("采集恢复，巡检数据恢复更新", "Collection recovered — inspection data resumed updating"),
+                    db.j({"count": 1})))
 
 
 def _mark_err(host_id: int, err: Exception) -> None:
@@ -67,15 +69,19 @@ def _mark_err(host_id: int, err: Exception) -> None:
     from .ssh import HostKeyChanged
     if isinstance(err, HostKeyChanged):
         db.execute("UPDATE hosts SET last_error=? WHERE id=?", ("HostKeyChanged", host_id))
-        msg = f"安全告警: {err}——疑似中间人或系统重装，采集已拒绝连接；确认后可在设置页重置该主机指纹"
+        msg = i18n.t(
+            f"安全告警: {err}——疑似中间人或系统重装，采集已拒绝连接；确认后可在设置页重置该主机指纹",
+            f"Security alert: {err} — possible MITM or OS reinstall; collection refused the connection. "
+            f"Reset the host fingerprint in Settings after confirming")
         db.execute("INSERT INTO events(ts,host_id,kind,message,data) VALUES(?,?,?,?,?)",
                    (db.now(), host_id, "finding", msg, db.j({"count": 1})))
         if _notify_broadcast:
             _spawn(_notify_broadcast("finding", msg, {}))
-        _spawn(notify.send("SSH 指纹变更", msg.split(": ", 1)[-1]))
+        _spawn(notify.send(i18n.t("SSH 指纹变更", "SSH host key changed"), msg.split(": ", 1)[-1]))
         return
     db.execute("UPDATE hosts SET last_error=? WHERE id=?", (type(err).__name__, host_id))
-    _log_collect_error(host_id, f"采集失败: {type(err).__name__}")
+    _log_collect_error(host_id, i18n.t(f"采集失败: {type(err).__name__}",
+                                       f"Collection failed: {type(err).__name__}"))
 
 
 def _spawn(coro):
@@ -88,13 +94,18 @@ def _spawn(coro):
 
 def _fmt_dur(sec: float) -> str:
     m = int(sec // 60)
+    zh = i18n.lang() != "en"
     if m < 60:
-        return f"{m} 分钟"
+        return f"{m} 分钟" if zh else f"{m} min"
     h = m // 60
     if h < 24:
-        return f"{h} 小时 {m % 60} 分" if m % 60 else f"{h} 小时"
+        if zh:
+            return f"{h} 小时 {m % 60} 分" if m % 60 else f"{h} 小时"
+        return f"{h} h {m % 60} min" if m % 60 else f"{h} h"
     d = h // 24
-    return f"{d} 天 {h % 24} 小时" if h % 24 else f"{d} 天"
+    if zh:
+        return f"{d} 天 {h % 24} 小时" if h % 24 else f"{d} 天"
+    return f"{d} d {h % 24} h" if h % 24 else f"{d} d"
 
 
 def _check_recovery(host_id: int, active_types: set[str]) -> int:
@@ -116,12 +127,16 @@ def _check_recovery(host_id: int, active_types: set[str]) -> int:
                        (db.now(), r["id"]))
             n += 1
             dur = _fmt_dur(db.now() - (r["ts"] or db.now()))
-            msg = f"发现已自动恢复: {r['title']}（持续 {dur}，连续 {RECOVER_ROUNDS} 轮未再触发）"
+            # 嵌套标题：r['title'] 取自库中已有发现（可能是历史中文行），直接嵌入——
+            # EN 下嵌中文标题可接受，主文案已 EN 化；出口正则兜底会同时翻主文案与嵌套标题
+            msg = i18n.t(f"发现已自动恢复: {r['title']}（持续 {dur}，连续 {RECOVER_ROUNDS} 轮未再触发）",
+                         f"Finding auto-recovered: {r['title']} "
+                         f"(lasted {dur}, {RECOVER_ROUNDS} rounds without re-trigger)")
             db.execute("INSERT INTO events(ts,host_id,kind,message,data) VALUES(?,?,'ok',?,?)",
                        (db.now(), host_id, msg, db.j({"count": 1})))
             if _notify_broadcast:
                 _spawn(_notify_broadcast("ok", msg, {}))
-            _spawn(notify.send("告警恢复", msg.split(": ", 1)[-1]))
+            _spawn(notify.send(i18n.t("告警恢复", "Alert recovered"), msg.split(": ", 1)[-1]))
         else:
             db.execute("UPDATE findings SET ok_streak=? WHERE id=?", (streak, r["id"]))
     return n
@@ -144,7 +159,9 @@ def _resend_crit(host_name: str, open_rows: list[dict], active_types: set[str]) 
         if db.now() - last >= minutes * 60:
             db.execute("UPDATE findings SET last_notified=? WHERE id=?", (db.now(), r["id"]))
             _spawn(notify.send(
-                "持续告警", f"{host_name}: {r['title']}（已持续超 {minutes} 分钟未恢复）"))
+                i18n.t("持续告警", "Ongoing alert"),
+                i18n.t(f"{host_name}: {r['title']}（已持续超 {minutes} 分钟未恢复）",
+                       f"{host_name}: {r['title']} (over {minutes} min without recovery)")))
 
 
 async def process_findings(h: dict, latest: dict, extras: dict) -> list[dict]:
@@ -172,13 +189,16 @@ async def process_findings(h: dict, latest: dict, extras: dict) -> list[dict]:
         new.append(f)
         db.execute("INSERT INTO events(ts,host_id,kind,message,data) VALUES(?,?,?,?,?)",
                    (db.now(), h["id"], "finding",
-                    f"[{f['severity'].upper()}] {f['title']}",
+                    i18n.t(f"[{f['severity'].upper()}] {f['title']}",
+                           f"[{f['severity'].upper()}] {f['title']}"),
                     db.j({"finding_id": fid})))
         if _notify_broadcast:
-            await _notify_broadcast("finding", f"[{f['severity'].upper()}] {f['title']}",
+            await _notify_broadcast("finding", i18n.t(f"[{f['severity'].upper()}] {f['title']}",
+                                                      f"[{f['severity'].upper()}] {f['title']}"),
                                     {"finding_id": fid})
         if f["severity"] == "crit" and not silenced:
-            ok, _ = await notify.send("发现告警", f"{h['name']}: {f['title']}")
+            ok, _ = await notify.send(i18n.t("发现告警", "Finding alert"),
+                                      i18n.t(f"{h['name']}: {f['title']}", f"{h['name']}: {f['title']}"))
             if ok:
                 db.execute("UPDATE findings SET last_notified=? WHERE id=?", (db.now(), fid))
         if f["severity"] == "crit" or f["type"] in ("login",):
@@ -233,7 +253,7 @@ async def collect_all() -> dict:
 async def tick():
     """Lightweight SSE heartbeat so the UI stays visibly live between cycles."""
     if _notify_broadcast:
-        await _notify_broadcast("tick", "巡检心跳", {})
+        await _notify_broadcast("tick", i18n.t("巡检心跳", "Inspection heartbeat"), {})
 
 
 async def _maybe_autoreport():
@@ -247,12 +267,15 @@ async def _maybe_autoreport():
     from . import reports
     r = reports.generate("auto")
     db.execute("INSERT INTO events(ts,host_id,kind,message,data) VALUES(?,NULL,'report',?,?)",
-               (db.now(), f"定时报告已生成（每 {minutes} 分钟），整体 {r['overall']} 分",
+               (db.now(), i18n.t(f"定时报告已生成（每 {minutes} 分钟），整体 {r['overall']} 分",
+                                 f"Scheduled report generated (every {minutes} min), overall score {r['overall']}"),
                 db.j({"report_id": r["id"]})))
     print(f"[report] auto report #{r['id']} overall={r['overall']}")
     if _notify_broadcast:
         _spawn(_notify_broadcast(
-            "report", f"定时健康报告已生成（整体 {r['overall']} 分）", {"report_id": r["id"]}))
+            "report", i18n.t(f"定时健康报告已生成（整体 {r['overall']} 分）",
+                             f"Scheduled health report generated (overall score {r['overall']})"),
+            {"report_id": r["id"]}))
     try:
         await reports.attach_ai_summary(r["id"])
     except Exception:

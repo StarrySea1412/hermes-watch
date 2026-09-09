@@ -50,7 +50,7 @@ export default function Fleet() {
   const groupColor = (g: string) => P[GROUP_ORDER[Math.max(0, groups.indexOf(g)) % GROUP_ORDER.length]] ?? P['--accent'] ?? '#22d3ee'
 
   const removeDemo = () => {
-    if (!confirm(`移除 ${demoCount} 台演示主机及其全部数据？（真实主机不受影响，之后可在 Fleet 页恢复演示）`)) return
+    if (!confirm(t('fleet.removeDemoConfirm', { n: demoCount }))) return
     api('/demo', { method: 'DELETE' }).then(load)
   }
 
@@ -65,10 +65,10 @@ export default function Fleet() {
       {loadErr && !hosts.length && (
         <div className="card p-10 text-center mb-4">
           <div className="flex justify-center mb-3 text-[var(--crit)]"><Ic name="alert" size={30} sw={1.5} /></div>
-          <div className="text-[13px] text-[var(--text-mute)] mb-1">Fleet 数据加载失败</div>
+          <div className="text-[13px] text-[var(--text-mute)] mb-1">{t('fleet.loadFailed')}</div>
           <div className="text-[11.5px] text-[var(--text-faint)] mono mb-4">{loadErr}</div>
-          <button className="btn btn-primary" onClick={load}><Ic name="refresh" size={13} /> 重试</button>
-          <div className="text-[11px] text-[var(--text-faint)] mt-4">后端可能正在重启，稍候重试即可</div>
+          <button className="btn btn-primary" onClick={load}><Ic name="refresh" size={13} /> {t('btn.retry')}</button>
+          <div className="text-[11px] text-[var(--text-faint)] mt-4">{t('fleet.backendRestartHint')}</div>
         </div>
       )}
 
@@ -77,22 +77,22 @@ export default function Fleet() {
           <span className="shrink-0" style={{ color: 'var(--violet)' }}><Ic name="flask" size={22} sw={1.8} /></span>
           <div className="flex-1">
             <div className="text-[13px] font-semibold text-[var(--text-hi)]">
-              演示引导模式 —— {demoCount} 台内置演示机，用于走通「告警 → 诊断 → 提案 → 执行」全流程
+              {t('fleet.demoBanner', { n: demoCount })}
             </div>
             <div className="text-[11.5px] text-[var(--text-mute)] mt-1 leading-relaxed">
-              真实接入两条路：<b>设置页 SSH 拉取</b>（填 IP + 密码；本机密钥免密主机密码留空即可）或 <b>接入中心出站 Agent</b>（Go 单二进制 / sh 脚本，免开入站端口）
+              {t('fleet.demoTwoWays')}<b>{t('fleet.demoViaSsh')}</b>{t('fleet.demoSshDetail')}{t('fleet.demoOr')} <b>{t('fleet.demoViaAgent')}</b>{t('fleet.demoAgentDetail')}
             </div>
           </div>
-          <a href="/settings" className="btn shrink-0" style={{ borderColor: 'var(--violet-border)' }}>接入真实服务器 →</a>
-          <button className="btn btn-ghost shrink-0" onClick={removeDemo}>移除演示主机</button>
+          <a href="/settings" className="btn shrink-0" style={{ borderColor: 'var(--violet-border)' }}>{t('fleet.connectReal')}</a>
+          <button className="btn btn-ghost shrink-0" onClick={removeDemo}>{t('fleet.removeDemoHosts')}</button>
         </div>
       )}
       {demoCount === 0 && hosts.length > 0 && (
         <div className="flex items-center gap-2.5 mb-4 text-[12px] text-[var(--text-faint)]">
-          <span className="flex items-center gap-1.5"><Ic name="radio" size={13} /> 真实接入模式 —— 全部为主机实采数据</span>
+          <span className="flex items-center gap-1.5"><Ic name="radio" size={13} /> {t('fleet.realMode')}</span>
           <button className="pill" style={{ background: 'var(--neutral-bg)', color: 'var(--text-mute)' }}
             onClick={() => api('/demo/seed', { method: 'POST' }).then(load).catch(e => alert(e.message))}>
-            ＋ 恢复演示引导
+            {t('fleet.restoreDemo')}
           </button>
         </div>
       )}
@@ -116,16 +116,16 @@ export default function Fleet() {
               ? { background: g === '全部' ? 'var(--accent-dim)' : alpha(groupColor(g), 0.12), color: g === '全部' ? 'var(--accent)' : groupColor(g), border: `1px solid ${g === '全部' ? 'var(--accent-border)' : alpha(groupColor(g), 0.27)}` }
               : { background: 'var(--neutral-bg)', border: '1px solid transparent' }}>
             {g !== '全部' && <span className="w-1.5 h-1.5 rounded-full" style={{ background: groupColor(g) }} />}
-            {g}
+            {g === '全部' ? t('fleet.groupAll') : g}
           </button>
         ))}
         <div className="ml-auto flex items-center gap-1.5 text-[12px] text-[var(--text-faint)]">
-          排序
+          {t('fleet.sortBy')}
           {(['score', 'findings', 'name'] as const).map(s => (
             <button key={s} onClick={() => setSort(s)}
               className={`pill ${sort === s ? 'text-[var(--accent)]' : ''}`}
               style={sort === s ? { background: 'var(--accent-dim)' } : { background: 'var(--neutral-bg)', color: 'var(--text-mute)' }}>
-              {{ score: '健康分', findings: '发现数', name: '名称' }[s]}
+              {{ score: t('fleet.sortScore'), findings: t('fleet.sortFindings'), name: t('fleet.sortName') }[s]}
             </button>
           ))}
         </div>
@@ -139,7 +139,7 @@ export default function Fleet() {
             <div key={h.id} className="card card-hover p-4 cursor-pointer rise-in"
               style={{ animationDelay: `${Math.min(i, 8) * 45}ms`, opacity: h.status === 'offline' ? 0.72 : undefined }}
               onClick={() => nav(`/host/${h.id}`)}
-              title={h.status === 'offline' && h.last_error ? `最近采集错误: ${h.last_error}` : undefined}>
+              title={h.status === 'offline' && h.last_error ? t('fleet.lastCollectError', { err: h.last_error }) : undefined}>
               <div className="flex items-start justify-between">
                 <div>
                   <div className="font-semibold text-[14.5px] text-[var(--text-hi)] flex items-center gap-2">
@@ -160,7 +160,7 @@ export default function Fleet() {
               <div className="flex items-center gap-3 mt-2">
                 <HealthRing score={h.score} size={70} thickness={6} />
                 <div className="flex-1 grid grid-cols-3 gap-1 text-center text-[11px] text-[var(--text-faint)]">
-                  {[['CPU', h.latest?.cpu, 'var(--m-cpu)'], ['内存', h.latest?.mem, 'var(--m-mem)'], ['磁盘', h.latest?.disk, 'var(--m-disk)']].map(([k, v, c]) => (
+                  {[['CPU', h.latest?.cpu, 'var(--m-cpu)'], [t('fleet.mem'), h.latest?.mem, 'var(--m-mem)'], [t('fleet.disk'), h.latest?.disk, 'var(--m-disk)']].map(([k, v, c]) => (
                     <div key={k as string}>
                       <div className="text-[13px] font-semibold num" style={{ color: v as number > 85 ? 'var(--crit)' : 'var(--text)' }}>
                         {v == null ? '—' : (v as number).toFixed(0)}%
@@ -175,13 +175,13 @@ export default function Fleet() {
               </div>
               <div className="mt-2"><Spark data={h.spark} metric="disk" color={color} /></div>
               <div className="text-[11px] text-[var(--text-faint)] mt-1.5 flex justify-between">
-                <span>发现 <span className={h.open_findings ? 'text-[var(--warn)] font-semibold' : ''}>{h.open_findings}</span>
-                  {h.uptime != null && <span className="ml-1.5 text-[var(--text-faint)]">· 24h 在线 {h.uptime}%</span>}
+                <span>{t('fleet.findingsLabel')} <span className={h.open_findings ? 'text-[var(--warn)] font-semibold' : ''}>{h.open_findings}</span>
+                  {h.uptime != null && <span className="ml-1.5 text-[var(--text-faint)]">· {t('fleet.onlineRate', { p: h.uptime })}</span>}
                 </span>
                 <span className={h.status === 'offline' ? 'text-[var(--crit)]' : ''}>
                   {h.status === 'offline'
-                    ? `失联 · 最后采集 ${fmtTime(h.last_ok_ts || h.latest?.ts || 0).slice(-8)}`
-                    : `${fmtTime(h.latest?.ts ?? 0).slice(-8)} 采集`}
+                    ? t('fleet.offlineLast', { time: fmtTime(h.last_ok_ts || h.latest?.ts || 0).slice(-8) })
+                    : t('fleet.collectedAt', { time: fmtTime(h.latest?.ts ?? 0).slice(-8) })}
                 </span>
               </div>
             </div>
@@ -191,8 +191,8 @@ export default function Fleet() {
 
       <div className="card p-4 mt-6">
         <div className="text-[12.5px] font-semibold text-[var(--text-mute)] mb-2.5 flex items-center gap-2">
-          <span className="pulse-dot" style={{ background: 'var(--accent)' }} /> 最近事件
-          <a href="/timeline" className="ml-auto text-[11.5px] font-normal text-[var(--accent)] hover:underline">查看全部 →</a>
+          <span className="pulse-dot" style={{ background: 'var(--accent)' }} /> {t('fleet.recentEvents')}
+          <a href="/timeline" className="ml-auto text-[11.5px] font-normal text-[var(--accent)] hover:underline">{t('fleet.viewAll')}</a>
         </div>
         <div className="space-y-1.5">
           {events.slice(0, 6).map(e => {
@@ -207,7 +207,7 @@ export default function Fleet() {
               </div>
             )
           })}
-          {!events.length && <div className="text-[var(--text-faint)] text-[12px] py-2">等待第一次巡检…</div>}
+          {!events.length && <div className="text-[var(--text-faint)] text-[12px] py-2">{t('fleet.waitingFirst')}</div>}
         </div>
       </div>
     </div>

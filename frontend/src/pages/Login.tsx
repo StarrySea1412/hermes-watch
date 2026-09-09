@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
+import { useT } from '../i18n'
 
 export default function Login() {
+  const { t } = useT()
   const [user, setUser] = useState('')
   const [pw, setPw] = useState('')
   const [err, setErr] = useState('')
@@ -19,7 +21,7 @@ export default function Login() {
       await api('/auth/login', { method: 'POST', body: JSON.stringify({ username: user, password: pw }) })
       location.href = '/'  // 整页跳转：Gate 重新校验会话后渲染面板
     } catch (e: any) {
-      setErr(e.message.includes('429') ? '尝试过于频繁，请稍后再试' : '口令错误')
+      setErr(e.message.includes('429') ? t('login.ratelimited') : t('login.badPass'))
     } finally { setBusy(false) }
   }
 
@@ -33,28 +35,27 @@ export default function Login() {
           </div>
           <div>
             <div className="font-bold text-[16px] text-[var(--text-hi)]">Hermes Watch</div>
-            <div className="text-[11px] text-[var(--text-faint)]">面板已开启访问控制，请输入凭据</div>
+            <div className="text-[11px] text-[var(--text-faint)]">{t('login.sub')}</div>
           </div>
         </div>
         {multiUser && (
-          <input className="input w-full mb-2.5" placeholder="用户名" autoFocus
+          <input className="input w-full mb-2.5" placeholder={t('login.user')} autoFocus
             value={user} onChange={e => setUser(e.target.value)} />
         )}
-        <input className="input w-full" type="password" placeholder={multiUser ? '口令' : '面板口令'}
+        <input className="input w-full" type="password" placeholder={multiUser ? t('login.pw') : t('login.pwPanel')}
           autoFocus={!multiUser}
           value={pw} onChange={e => setPw(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && submit()} />
         {err && <div className="text-[12px] mt-2.5" style={{ color: 'var(--crit)' }}>✕ {err}</div>}
         <button className="btn btn-primary w-full justify-center mt-4" disabled={busy || !pw} onClick={submit}>
-          {busy ? '验证中…' : '解锁面板'}
+          {busy ? t('login.verifying') : t('login.unlock')}
         </button>
         <div className="text-[10.5px] text-[var(--text-faint)] mt-4 leading-relaxed">
-          {multiUser ? '账号由管理员在 设置 → 用户管理 中创建；连续输错 10 次将锁定 1 分钟。'
-            : '口令在 设置 → 访问控制 中配置；连续输错 10 次将锁定 1 分钟。'}
+          {multiUser ? t('login.hintMulti') : t('login.hintSingle')}
         </div>
       </div>
       <div className="absolute bottom-6 inset-x-0 text-center text-[10.5px] text-[var(--text-faint)] select-none">
-        🐚 Hermes Watch · 本地服务器巡检平台 · 数据不出本机
+        🐚 Hermes Watch · {t('login.footer')}
       </div>
     </div>
   )

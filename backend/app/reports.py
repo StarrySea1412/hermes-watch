@@ -10,7 +10,7 @@ import time
 
 import httpx
 
-from . import db, rules
+from . import db, i18n, rules
 
 SEV_COLOR = {"crit": "#ef4444", "warn": "#f59e0b", "info": "#3b82f6"}
 SEV_LABEL = {"crit": "严重", "warn": "警告", "info": "提示"}
@@ -496,33 +496,36 @@ def list_reports(limit=20):
 def render_status_page(snap: dict) -> str:
     """公开状态页（带 token 只读分享）：健康概览 + 主机状态 + 未处理发现标题。
     刻意不包含：主机 IP/地址、SSH 凭据、证据链输出、终端入口。自动刷新 60s。"""
+    L = i18n.lang()
     hosts = snap["hosts"]
     scores = [h["score"] for h in hosts] or [100]
     overall = round(sum(scores) / len(scores))
-    color, verdict = _verdict(overall)
+    color, verdict = _verdict(overall, L)
     gen_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(snap.get("generated_at") or time.time()))
 
-    STATUS_LABEL = {"ok": ("运行正常", "#22c55e"), "warn": ("需要关注", "#f59e0b"),
-                    "crit": ("需要处置", "#ef4444"), "offline": ("离线", "#94a3b8")}
+    STATUS_LABEL = {"ok": (i18n.t("运行正常", "Operational"), "#22c55e"), "warn": (i18n.t("需要关注", "Needs attention"), "#f59e0b"),
+                    "crit": (i18n.t("需要处置", "Needs action"), "#ef4444"), "offline": (i18n.t("离线", "Offline"), "#94a3b8")}
     cards = []
     for h in hosts:
         l = h.get("latest") or {}
         label, c = STATUS_LABEL.get(h["status"], STATUS_LABEL["ok"])
         up = h.get("uptime")
-        def _bar(v, name):
+        def _bar(v, name, css_name):
             if v is None:
                 return ""
             hot = v >= 85
             return (f'<div class="metric"><span>{name}</span>'
-                    f'<div class="bar"><i style="width:{min(100, v):.0f}%;background:var(--m-{name.lower()})"></i></div>'
+                    f'<div class="bar"><i style="width:{min(100, v):.0f}%;background:var(--m-{css_name})"></i></div>'
                     f'<b class="{"hot" if hot else ""}">{v:.0f}%</b></div>')
-        up_html = (f'<span class="up">24h 在线 {up:.1f}%</span>' if up is not None else "")
+        # 指标名显示随语言，CSS 变量名保持语言无关
+        M_CPU, M_MEM, M_DISK = i18n.t("CPU", "CPU"), i18n.t("内存", "Mem"), i18n.t("磁盘", "Disk")
+        up_html = (f'<span class="up">{i18n.t("24h 在线", "24h uptime")} {up:.1f}%</span>' if up is not None else "")
         cards.append(f"""
       <div class="host">
         <div class="hrow"><b>{html.escape(h['name'])}</b>{up_html}
           <span class="chip" style="color:{c};border-color:{c}55;background:{c}18">{label}</span>
           <span class="score" style="color:{c}">{h['score']}</span></div>
-        {_bar(l.get('cpu'), 'CPU')}{_bar(l.get('mem'), '内存')}{_bar(l.get('disk'), '磁盘')}
+        {_bar(l.get('cpu'), M_CPU, 'cpu')}{_bar(l.get('mem'), M_MEM, 'mem')}{_bar(l.get('disk'), M_DISK, 'disk')}
       </div>""")
 
     fs = db.query(
@@ -531,20 +534,20 @@ def render_status_page(snap: dict) -> str:
         "ORDER BY CASE f.severity WHEN 'crit' THEN 0 WHEN 'warn' THEN 1 ELSE 2 END, f.ts DESC LIMIT 12")
     finding_rows = "".join(
         f'<li><span class="dot" style="background:{SEV_COLOR.get(f["severity"], "#888")}"></span>'
-        f'{html.escape(f["title"])}<em>{html.escape(f["host_name"])}</em></li>'
-        for f in fs) or '<li class="none">当前没有待处理的发现 —— 一切正常</li>'
+        f'{html.escape(i18n.tr_finding_title(f["title"]))}<em>{html.escape(f["host_name"])}</em></li>'
+        for f in fs) or f'<li class="none">{i18n.t("当前没有待处理的发现 —— 一切正常", "No open findings right now — all clear")}</li>'
 
     return f"""<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8">
+<html lang="{'en' if L == 'en' else 'zh-CN'}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="refresh" content="60">
-<title>Hermes Watch · 服务状态</title>
+<title>Hermes Watch · {i18n.t('服务状态', 'Service Status')}</title>
 <style>
   :root {{ color-scheme: light dark; --bg:#f4f5f7; --panel:#ffffff; --text:#1a2333; --mute:#64748b;
-          --line:#e2e8f0; --m-cpu:#0ea5e9; --m-内存:#8b5cf6; --m-cpu2:#0ea5e9; --m-磁盘:#f59e0b; --m-内存2:#8b5cf6; }}
+          --line:#e2e8f0; --m-cpu:#0ea5e9; --m-mem:#8b5cf6; --m-disk:#f59e0b; --m-cpu2:#0ea5e9; --m-mem2:#8b5cf6; }}
   @media (prefers-color-scheme: dark) {{
     :root {{ --bg:#0a0f1c; --panel:#101828; --text:#e6edf7; --mute:#8fa3bd; --line:#223049;
-            --m-cpu:#38bdf8; --m-磁盘:#fbbf24; }}
+            --m-cpu:#38bdf8; --m-disk:#fbbf24; }}
   }}
   * {{ box-sizing:border-box; }}
   body {{ margin:0; padding:32px 16px; background:var(--bg); color:var(--text);
@@ -579,10 +582,10 @@ def render_status_page(snap: dict) -> str:
 </style></head><body><div class="page">
   <div class="head"><h1>Hermes Watch</h1><span class="verdict">{overall}</span>
     <span style="color:{color};font-weight:600">{verdict}</span></div>
-  <div class="meta">Fleet 平均健康分 · {len(hosts)} 台主机 · 每分钟自动刷新 · 生成于 {gen_str}</div>
+  <div class="meta">{i18n.t('Fleet 平均健康分', 'Fleet average health score')} · {len(hosts)} {i18n.t('台主机', 'hosts')} · {i18n.t('每分钟自动刷新', 'auto-refreshes every minute')} · {i18n.t('生成于', 'generated')} {gen_str}</div>
   {''.join(cards)}
-  <h2>待处理发现</h2>
+  <h2>{i18n.t('待处理发现', 'Open Findings')}</h2>
   <ul>{finding_rows}</ul>
-  <footer>本页由 Hermes Watch 本地规则引擎生成 · 只读状态页，不含主机地址与巡检证据<br>
-  完整诊断与运维能力请访问面板（需授权）</footer>
+  <footer>{i18n.t('本页由 Hermes Watch 本地规则引擎生成 · 只读状态页，不含主机地址与巡检证据', 'Generated by the Hermes Watch local rule engine · read-only status page, no host addresses or inspection evidence')}<br>
+  {i18n.t('完整诊断与运维能力请访问面板（需授权）', 'For full diagnostics and operations, visit the panel (authorization required)')}</footer>
 </div></body></html>"""

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import '@xterm/xterm/css/xterm.css'
 import { api, type Host } from '../api'
+import { useT } from '../i18n'
 import { PageHead } from '../ui'
 import { useChartPalette } from '../theme'
 
@@ -10,6 +11,7 @@ import { useChartPalette } from '../theme'
  * 终端画布任何主题下都保持深色（--term-bg/--term-fg），更像真终端。
  */
 export default function TerminalPage() {
+  const { t } = useT()
   const [hosts, setHosts] = useState<Host[]>([])
   const [sel, setSel] = useState<number | null>(null)
   const [connected, setConnected] = useState(false)
@@ -73,7 +75,7 @@ export default function TerminalPage() {
     ws.onmessage = e => term.write(e.data)
     ws.onclose = () => {
       setConnected(false)
-      term.write('\r\n\x1b[38;5;245m[连接已关闭]\x1b[0m\r\n')
+      term.write(`\r\n\x1b[38;5;245m[${t('term.closed')}]\x1b[0m\r\n`)
     }
     const dataSub = term.onData((d: string) => { if (ws.readyState === WebSocket.OPEN) ws.send(d) })
     return () => { dataSub.dispose(); ws.close() }
@@ -83,7 +85,7 @@ export default function TerminalPage() {
 
   return (
     <div className="fade-in">
-      <PageHead title="远程终端" sub="演示主机为模拟 shell · 真实主机走 SSH PTY（asyncssh）">
+      <PageHead title={t('nav.terminal')} sub={t('term.sub')}>
         {hosts.map(h => (
           <button key={h.id} onClick={() => setSel(h.id)}
             className={`pill ${sel === h.id ? '' : 'text-[var(--text-mute)]'}`}
@@ -97,22 +99,21 @@ export default function TerminalPage() {
       <div className="card p-2 transition-colors" style={{ borderColor: connected ? 'var(--ok-border)' : undefined }}>
         <div className="flex items-center gap-2 px-2.5 py-1.5 text-[11.5px] text-[var(--text-faint)] flex-wrap">
           <span className="pulse-dot" style={{ background: connected ? 'var(--ok)' : 'var(--warn)' }} />
-          {host ? host.name : '选择主机'}
+          {host ? host.name : t('term.pickHost')}
           {host && (
             <span className="pill" style={host.mock
               ? { background: 'var(--neutral-bg)', color: 'var(--text-mute)', fontSize: 10 }
               : { background: 'var(--accent-dim)', color: 'var(--accent)', fontSize: 10 }}>
-              {host.mock ? '模拟 shell' : 'SSH PTY'}
+              {host.mock ? t('term.mockShell') : 'SSH PTY'}
             </span>
           )}
-          <span className="ml-auto mono">{connected ? '● 已连接' : '连接中…'}</span>
+          <span className="ml-auto mono">{connected ? t('term.connected') : t('term.connecting')}</span>
         </div>
         <div ref={boxRef} style={{ height: 'calc(100vh - 250px)', background: 'var(--term-bg)', borderRadius: 10, padding: 8 }} />
       </div>
       {host?.mock && (
         <p className="text-[11.5px] text-[var(--text-faint)] mt-3 leading-relaxed">
-          演示终端支持：help · ls · cd · cat · ps · top · df · free · uptime · last · systemctl status …
-          全部只读，输出为模拟数据，用于完整展示终端体验。
+          {t('term.demoHelp')}
         </p>
       )}
     </div>

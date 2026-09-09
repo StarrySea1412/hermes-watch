@@ -4,6 +4,7 @@ import * as echarts from 'echarts'
 import { api, subscribe, type HostCard } from '../api'
 import { Ic } from '../icons'
 import { PageHead } from '../ui'
+import { useT } from '../i18n'
 import { alpha, useChartPalette } from '../theme'
 
 /**
@@ -14,6 +15,7 @@ import { alpha, useChartPalette } from '../theme'
 const RING: Record<HostCard['status'], number> = { crit: 150, warn: 240, ok: 330, offline: 330 }
 
 export default function Topology() {
+  const { t, lang } = useT()
   const [hosts, setHosts] = useState<HostCard[]>([])
   const nav = useNavigate()
   useEffect(() => {
@@ -115,7 +117,7 @@ export default function Topology() {
             shadowBlur: st === 'ok' ? 16 : 26, shadowColor: alpha(c, 0.55),
           },
           label: { show: true, position: 'bottom', distance: 7,
-            formatter: `{name|${h.name}}\n{meta|${h.group}${h.latest ? ` · CPU ${h.latest.cpu.toFixed(0)}% · 磁盘 ${h.latest.disk.toFixed(0)}%` : ''}}\n{score|● ${h.score}}`,
+            formatter: `{name|${h.name}}\n{meta|${h.group}${h.latest ? ` · CPU ${h.latest.cpu.toFixed(0)}% · ${t('topo.disk')} ${h.latest.disk.toFixed(0)}%` : ''}}\n{score|● ${h.score}}`,
             rich: {
               name: { color: P['--text-hi'], fontSize: 12.5, fontWeight: 600, align: 'center', lineHeight: 19 },
               meta: { color: P['--text-faint'], fontSize: 10, align: 'center', lineHeight: 15 },
@@ -146,14 +148,14 @@ export default function Topology() {
         formatter: (p: any) => {
           if (p?.dataType !== 'node') return ''
           const id = String(p?.data?.id ?? '')
-          if (id === 'hub' || id.startsWith('deco')) return 'Hermes Watch · 本机面板'
+          if (id === 'hub' || id.startsWith('deco')) return t('topo.hubTooltip')
           const h = hostsRef.current.find(x => String(x.id) === id)
           if (!h) return p.name ?? ''
           const l = h.latest ?? ({} as any)
           return `<div style="min-width:212px"><b>${h.name}</b> <span style="color:${P['--text-faint']}">· ${h.group}</span>
-            <div style="margin-top:3px">健康分 <b style="color:${colorOf(h)}">${h.score}</b> · 待处理发现 ${h.open_findings} 条</div>
-            ${bar('CPU', l.cpu, P['--m-cpu'])}${bar('内存', l.mem, P['--m-mem'])}${bar('磁盘', l.disk, P['--m-disk'])}
-            <div style="margin-top:6px;color:${P['--text-faint']};font-size:11px"><i>点击节点进入主机详情</i></div></div>`
+            <div style="margin-top:3px">${t('topo.healthScore')} <b style="color:${colorOf(h)}">${h.score}</b> · ${t('topo.openFindingsN', { n: h.open_findings })}</div>
+            ${bar('CPU', l.cpu, P['--m-cpu'])}${bar(t('topo.mem'), l.mem, P['--m-mem'])}${bar(t('topo.disk'), l.disk, P['--m-disk'])}
+            <div style="margin-top:6px;color:${P['--text-faint']};font-size:11px"><i>${t('topo.clickNodeHint')}</i></div></div>`
         },
       },
       series: [{
@@ -164,7 +166,7 @@ export default function Topology() {
       }],
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hosts, P])
+  }, [hosts, P, lang])
 
   const stats = useMemo(() => ({
     ok: hosts.filter(h => h.status === 'ok').length,
@@ -183,16 +185,16 @@ export default function Topology() {
 
   return (
     <div className="fade-in flex flex-col" style={{ height: 'calc(100vh - 120px)' }}>
-      <PageHead title="拓扑视图" sub="Hub → 各主机 · 按健康状态分层（严重内圈 → 健康外圈）· 点击节点进入主机详情" />
+      <PageHead title={t('nav.topology')} sub={t('topo.sub')} />
       <div className="card flex-1 min-h-0 flex flex-col overflow-hidden">
         <div className="shrink-0 flex items-center gap-2 flex-wrap px-3.5 py-2.5 border-b" style={{ borderColor: 'var(--border)' }}>
-          <span className="text-[12.5px] font-semibold text-[var(--text-hi)]">Fleet 拓扑</span>
-          {chip('var(--ok)', 'var(--ok-bg)', 'var(--ok)', `${stats.ok} 健康`)}
-          {stats.warn > 0 && chip('var(--warn)', 'var(--warn-bg)', 'var(--warn)', `${stats.warn} 警告`)}
-          {stats.crit > 0 && chip('var(--crit)', 'var(--crit-bg)', 'var(--crit)', `${stats.crit} 严重`)}
-          {stats.offline > 0 && chip('var(--text-mute)', 'var(--neutral-bg)', 'var(--text-faint)', `${stats.offline} 离线`)}
-          {stats.findings > 0 && chip('var(--text-mute)', 'var(--neutral-bg)', 'var(--text-faint)', `${stats.findings} 待处理发现`)}
-          <span className="ml-auto text-[10.5px] text-[var(--text-faint)]">滚轮缩放 · 拖拽平移 · 悬停看指标</span>
+          <span className="text-[12.5px] font-semibold text-[var(--text-hi)]">{t('topo.panelTitle')}</span>
+          {chip('var(--ok)', 'var(--ok-bg)', 'var(--ok)', t('topo.nHealthy', { n: stats.ok }))}
+          {stats.warn > 0 && chip('var(--warn)', 'var(--warn-bg)', 'var(--warn)', t('topo.nWarn', { n: stats.warn }))}
+          {stats.crit > 0 && chip('var(--crit)', 'var(--crit-bg)', 'var(--crit)', t('topo.nCrit', { n: stats.crit }))}
+          {stats.offline > 0 && chip('var(--text-mute)', 'var(--neutral-bg)', 'var(--text-faint)', t('topo.nOffline', { n: stats.offline }))}
+          {stats.findings > 0 && chip('var(--text-mute)', 'var(--neutral-bg)', 'var(--text-faint)', t('topo.nFindings', { n: stats.findings }))}
+          <span className="ml-auto text-[10.5px] text-[var(--text-faint)]">{t('topo.controlsHint')}</span>
         </div>
         <div className="relative flex-1 min-h-0 topo-bg">
           {hosts.length === 0 ? (
@@ -200,7 +202,7 @@ export default function Topology() {
               <div className="text-center">
                 <div className="flex justify-center mb-2 text-[var(--text-faint)]"><Ic name="radio" size={30} sw={1.5} /></div>
                 <div className="text-[13px] text-[var(--text-faint)]">
-                  还没有主机 —— 去 <a href="/settings" className="text-[var(--accent)] hover:underline">设置页</a> 添加 SSH 主机，或到 <a href="/enroll" className="text-[var(--accent)] hover:underline">接入中心</a> 部署出站 Agent
+                  {t('topo.emptyBefore')}<a href="/settings" className="text-[var(--accent)] hover:underline">{t('topo.settingsLink')}</a>{t('topo.emptyMiddle')}<a href="/enroll" className="text-[var(--accent)] hover:underline">{t('topo.enrollLink')}</a>{t('topo.emptyAfter')}
                 </div>
               </div>
             </div>
