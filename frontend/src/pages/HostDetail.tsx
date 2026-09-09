@@ -13,7 +13,7 @@ type Detail = {
   extras: { top_proc: string; failed_services: string[]; logins: { user: string; tty: string; ip: string; when: string }[]; cert_days_left: number | null }
 }
 
-  const TABS = ['进程', '服务与登录', '证书', 'IO 与温度'] as const
+  const TABS = ['进程', '服务与登录', '证书', 'IO 与温度', '端口与暴露'] as const
 
 export default function HostDetail() {
   const { id } = useParams()
@@ -21,7 +21,15 @@ export default function HostDetail() {
   const [err, setErr] = useState('')
   const [range, setRange] = useState(240)
   const [tab, setTab] = useState<(typeof TABS)[number]>('进程')
+  const [portInfo, setPortInfo] = useState<{ ports: { port: number; addr: string; proc?: string }[]; baseline: number[]; new_ports: number[] } | null>(null)
   const P = useChartPalette()
+
+  useEffect(() => {
+    if (tab === '端口与暴露' && !portInfo) {
+      api<{ ports: any[]; baseline: number[]; new_ports: number[] }>(`/hosts/${id}/ports`)
+        .then(setPortInfo).catch(() => { /* noop */ })
+    }
+  }, [tab, id, portInfo])
 
   useEffect(() => {
     let alive = true
@@ -226,6 +234,70 @@ export default function HostDetail() {
                 : <span className="text-[var(--text-faint)] ml-1">未检测到温度传感器</span>}
             </div>
             <div className="text-[11px] text-[var(--text-faint)]">写入持续超 80 MB/s 或温度超 80°C 时规则引擎产生发现；阈值可在设置页调整</div>
+          </div>
+        )}
+        {tab === '端口与暴露' && (
+          <div className="text-[13px]">
+            {!portInfo && <div className="text-[var(--text-faint)]">读取端口清单…（agent 或 SSH 探针上报）</div>}
+            {portInfo && (
+              <>
+                <div className="flex items-center gap-2.5 mb-2.5 flex-wrap">
+                  <span>当前监听 <b className="num">{portInfo.ports.length}</b> 个端口</span>
+                  <span className="text-[var(--text-faint)]">·</span>
+                  <span>基线 <b className="num">{portInfo.baseline.length}</b> 个</span>
+                  {portInfo.new_ports.length > 0 && (
+                    <span className="pill" style={{ background: 'var(--warn-bg)', color: 'var(--warn)' }}>
+                      基线外 {portInfo.new_ports.join(', ')}
+                    </span>
+                  )}
+                  <button className="btn btn-ghost ml-auto shrink-0" style={{ fontSize: 11 }}
+                    title="业务大改后使用：下一轮巡检重新学习基线"
+                    onClick={() => api(`/hosts/${id}/ports/baseline`, { method: 'DELETE' })
+                      .then(() => setPortInfo(null))}>↺ 重置基线</button>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="text-[12px] w-full">
+                    <thead>
+                      <tr className="text-[11px] text-[var(--text-faint)] text-left border-b border-[var(--border)]">
+                        <th className="py-2 font-medium">端口</th><th className="font-medium">监听地址</th>
+                        <th className="font-medium">进程</th><th className="font-medium">基线</th><th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {portInfo.ports.map(p => {
+                        const inBaseline = portInfo.baseline.includes(p.port)
+                        return (
+                          <tr key={`${p.addr}:${p.port}`} className="border-b border-[var(--border)] last:border-0">
+                            <td className="py-1.5 font-bold num">{p.port}</td>
+                            <td className="mono text-[var(--text-mute)]">{p.addr}</td>
+                            <td className="text-[var(--text-mute)]">{p.proc || '—'}</td>
+                            <td>
+                              {inBaseline
+                                ? <span className="pill" style={{ background: 'var(--ok-bg)', color: 'var(--ok)', fontSize: 10 }}>基线内</span>
+                                : <span className="pill" style={{ background: 'var(--warn-bg)', color: 'var(--warn)', fontSize: 10 }}>基线外</span>}
+                            </td>
+                            <td className="text-right">
+                              {!inBaseline && (
+                                <button className="text-[11.5px] text-[var(--text-faint)] hover:text-[var(--accent)]"
+                                  title="确认为合法业务端口：加入基线后不再告警"
+                                  onClick={() => api(`/hosts/${id}/ports/baseline`, { method: 'POST', body: JSON.stringify({ ports: [p.port] }) })
+                                    .then(() => setPortInfo(null))}>加入基线</button>
+                              )}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                      {!portInfo.ports.length && (
+                        <tr><td colSpan={5} className="py-3 text-[var(--text-faint)]">暂无端口上报（需出站 agent 或 SSH 探针采集）</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="text-[11px] text-[var(--text-faint)] mt-2.5 leading-relaxed">
+                  基线外的监听端口会立即产生「新增监听端口」发现；连续 5 轮仍存在则自动并入基线。端口消失不告警，基线同步收缩。
+                </div>
+              </>
+            )}
           </div>
         )}
         </div>

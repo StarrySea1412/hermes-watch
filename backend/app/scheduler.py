@@ -11,7 +11,7 @@
 import asyncio
 import traceback
 
-from . import analysis, collector, db, notify, rules
+from . import analysis, collector, db, notify, ports, rules
 
 POLL = 60
 _notify_broadcast = None  # set by main.py at startup to avoid a circular import
@@ -151,6 +151,9 @@ async def process_findings(h: dict, latest: dict, extras: dict) -> list[dict]:
     """规则评估 → 落新发现 → 事件/通知 → crit 重发 → 恢复观察。
     scheduler 轮询与 agent push 共用同一套告警生命周期。返回新落库的发现。"""
     triggered = rules.evaluate(h, latest, extras)
+    # 端口暴露面侦查：LISTEN 清单比对基线，新监听端口并入发现流
+    _, _, port_findings = ports.evaluate_ports(h, extras)
+    triggered.extend(port_findings)
     active_types = {f["type"] for f in triggered}
     open_rows = db.query(
         "SELECT id, host_id, type, severity, ts, last_notified, acked_at, title FROM findings "

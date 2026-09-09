@@ -13,7 +13,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
-from . import agent, analysis, auth, ccswitch, db, executor, mcp_server, notify, reports, rules, scheduler, seed, secrets, terminal
+from . import agent, analysis, auth, ccswitch, db, executor, mcp_server, notify, ports, reports, rules, scheduler, seed, secrets, terminal
 
 # 前端经 vite 代理（生产同源部署）访问 /api，浏览器永远同源 —— 不开 CORS 面
 
@@ -736,6 +736,50 @@ async def trust_host_key(hid: int):
         raise HTTPException(404, "主机不存在")
     db.execute("UPDATE hosts SET host_key_fp='', last_error='' WHERE id=?", (hid,))
     await broadcast("host", f"{h['name']} 主机指纹已重置，下次连接将重新记录", {"host_id": hid})
+    return {"ok": True}
+
+
+# ---------- 端口暴露面侦查 ----------
+
+class PortBaselineIn(BaseModel):
+    ports: list[int]  # 加入基线的端口列表（发现卡「加入基线」）
+
+
+@app.get("/api/hosts/{hid}/ports")
+async def host_ports(hid: int):
+    """当前 LISTEN 清单（last_extras.ports）+ 基线 + 基线外端口，供详情页「端口与暴露」tab。"""
+    h = db.query_one("SELECT * FROM hosts WHERE id=?", (hid,))
+    if not h:
+        raise HTTPException(404, "主机不存在")
+    extras = db.uj(h["last_extras"], {}) or {}
+    current = extras.get("ports") or []
+    baseline = sorted(ports.get_baseline(hid))
+    current_ports = {int(p.get("port") or 0) for p in current if isinstance(p, dict)}
+    return {"ports": current, "baseline": baseline,
+            "new_ports": sorted(current_ports - set(baseline))}
+
+
+@app.post("/api/hosts/{hid}/ports/baseline")
+async def ports_baseline_add(hid: int, b: PortBaselineIn, request: Request):
+    _require_admin(request)
+    cur = ports.get_baseline(hid)
+    ports.save_baseline(hid, cur | {int(x) for x in b.ports if 0 < int(x) <= 65535})
+    # 端口进基线后，对应 port_new 发现自动解决
+    for port in b.ports:
+        db.execute("UPDATE findings SET status='resolved', resolved_at=? WHERE host_id=? AND type='port_new' "
+                   "AND status IN ('open','analyzed') AND evidence LIKE ?",
+                   (db.now(), hid, f'%{int(port)}%'))
+    await broadcast("host", f"主机 #{hid} 端口基线已更新（+{len(b.ports)}）", {"host_id": hid})
+    return {"ok": True}
+
+
+@app.delete("/api/hosts/{hid}/ports/baseline")
+async def ports_baseline_reset(hid: int, request: Request):
+    """重置基线：下一轮采集重新学习（主机业务大改后用）。"""
+    _require_admin(request)
+    db.execute("DELETE FROM settings WHERE key IN (?, ?)",
+               (f"{ports.BASELINE_PREFIX}{hid}", f"{ports.BASELINE_PREFIX}{hid}:seen"))
+    await broadcast("host", f"主机 #{hid} 端口基线已重置，下轮巡检重新学习", {"host_id": hid})
     return {"ok": True}
 
 

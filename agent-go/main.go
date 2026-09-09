@@ -31,13 +31,20 @@ import (
 	"time"
 )
 
+type PortListen struct {
+	Port int    `json:"port"`
+	Addr string `json:"addr"` // 0.0.0.0=全接口 / 127.0.0.1=仅本机 / :::80 同理
+	Proc string `json:"proc,omitempty"`
+}
+
 type Extra struct {
-	TopProc      string   `json:"top_proc,omitempty"`
-	FailedSvcs   []string `json:"failed_services,omitempty"`
-	CertDaysLeft *int     `json:"cert_days_left,omitempty"`
-	DiskIORead   float64  `json:"disk_io_read,omitempty"`  // KiB/s（采样窗口均值）
-	DiskIOWrite  float64  `json:"disk_io_write,omitempty"` // KiB/s
-	TempC        float64  `json:"temp_c,omitempty"`        // 主温度传感器 °C（无传感器时为 0 不上报）
+	TopProc      string       `json:"top_proc,omitempty"`
+	FailedSvcs   []string     `json:"failed_services,omitempty"`
+	CertDaysLeft *int         `json:"cert_days_left,omitempty"`
+	DiskIORead   float64      `json:"disk_io_read,omitempty"`  // KiB/s（采样窗口均值）
+	DiskIOWrite  float64      `json:"disk_io_write,omitempty"` // KiB/s
+	TempC        float64      `json:"temp_c,omitempty"`        // 主温度传感器 °C（无传感器时为 0 不上报）
+	Ports        []PortListen `json:"ports,omitempty"`         // LISTEN 端口清点（业务暴露面侦查）
 }
 
 type Payload struct {
@@ -357,6 +364,94 @@ func maxF(a, b float64) float64 {
 	return b
 }
 
+// readPorts 盘点 LISTEN 状态的 TCP 端口（IPv4+IPv6，直接解析 /proc/net/tcp{,6}）。
+// 进程名通过 /proc/<pid>/fd 的 socket inode 反查（best effort，权限不足时留空）。
+func readPorts() []PortListen {
+	type listenEntry struct {
+		addr, inode string
+		pl          PortListen
+	}
+	seen := map[string]bool{} // addr:port 去重
+	var entries []listenEntry
+
+	parse := func(data string, v6 bool) {
+		for _, line := range strings.Split(data, "
+") {
+			fields := strings.Fields(line)
+			if len(fields) < 10 || fields[3] != "0A" { // st=0A → LISTEN
+				continue
+			}
+			ap := strings.Split(fields[1], ":")
+			if len(ap) != 2 {
+				continue
+			}
+			port, err := strconv.ParseInt(ap[1], 16, 32)
+			if err != nil || port <= 0 || port > 65535 {
+				continue
+			}
+			var addr string
+			if v6 {
+				switch {
+				case ap[0] == strings.Repeat("0", 32):
+					addr = "::"
+				case strings.HasPrefix(ap[0], strings.Repeat("0", 24)+"ffff"):
+					addr = "0.0.0.0" // v4-mapped 通配
+				default:
+					addr = "v6:" + ap[0]
+				}
+			} else {
+				b, err := hex.DecodeString(ap[0])
+				if err != nil || len(b) != 4 {
+					continue
+				}
+				addr = fmt.Sprintf("%d.%d.%d.%d", b[3], b[2], b[1], b[0])
+			}
+			key := addr + ":" + strconv.Itoa(int(port))
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			entries = append(entries, listenEntry{addr: ap[0] + ":" + ap[1], inode: fields[9], pl: PortListen{Port: int(port), Addr: addr}})
+		}
+	}
+	if d, err := os.ReadFile("/proc/net/tcp"); err == nil {
+		parse(d, false)
+	}
+	if d, err := os.ReadFile("/proc/net/tcp6"); err == nil {
+		parse(d, true)
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+
+	// socket inode → 进程名（/proc/<pid>/fd/* 链接反查；无权限的进程留空）
+	inodeProc := map[string]string{}
+	for _, fd := range filepath.Glob("/proc/[0-9]*/fd/*") {
+		link, err := os.Readlink(fd)
+		if err != nil || !strings.HasPrefix(link, "socket:[") {
+			continue
+		}
+		inode := strings.TrimSuffix(strings.TrimPrefix(link, "socket:["), "]")
+		if _, done := inodeProc[inode]; done {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(filepath.Dir(fd), "..", "comm"))
+		inodeProc[inode] = strings.TrimSpace(string(b))
+	}
+
+	ports := make([]PortListen, 0, len(entries))
+	for _, e := range entries {
+		e.pl.Proc = inodeProc[e.inode]
+		ports = append(ports, e.pl)
+	}
+	sort.Slice(ports, func(i, j int) bool { return ports[i].Port < ports[j].Port })
+	if len(ports) > 64 { // 异常主机端口爆炸保护
+		ports = ports[:64]
+	}
+	return ports
+}
+
+// filepathGlob 薄封装：便于将来按需替换实现
 // sh runs one of two whitelisted read-only commands (df / systemctl).
 func sh(cmd string) string {
 	parts := strings.Fields(cmd)
@@ -391,7 +486,10 @@ func collect() (Payload, string) {
 		Load1: round2(load1),
 	}
 	p.NetIn, p.NetOut = readNet()
-	ex := &Extra{TopProc: readTopProcs(), FailedSvcs: readFailedServices(), CertDaysLeft: readCertDays()}
+	ex := &Extra{TopProc: readTopProcs(), FailedSvcs: readFailedServices(), CertDaysLeft: readCertDays(), Ports: readPorts()}
+	if len(ex.Ports) == 0 {
+		ex.Ports = nil // 空清单省略字段，后端按未上报处理
+	}
 	if readKBs, writeKBs := readDiskIO(); readKBs > 0 || writeKBs > 0 {
 		ex.DiskIORead = round1(readKBs)
 		ex.DiskIOWrite = round1(writeKBs)
@@ -399,7 +497,7 @@ func collect() (Payload, string) {
 	if t := readTemp(); t > 0 {
 		ex.TempC = round1(t)
 	}
-	if ex.TopProc != "" || len(ex.FailedSvcs) > 0 || ex.CertDaysLeft != nil ||
+	if ex.TopProc != "" || len(ex.FailedSvcs) > 0 || ex.CertDaysLeft != nil || len(ex.Ports) > 0 ||
 		ex.DiskIORead > 0 || ex.DiskIOWrite > 0 || ex.TempC > 0 {
 		p.Extra = ex
 	}

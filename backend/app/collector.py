@@ -7,6 +7,7 @@ demo story works with zero external machines.
 """
 import asyncio
 import random
+import re
 
 from . import db
 
@@ -29,9 +30,45 @@ DETAIL_PROBES = {
     "failed_services": "systemctl list-units --state=failed --no-legend --plain 2>/dev/null | awk '{print $1}'",
     "logins": "last -n 12 -w 2>/dev/null || last -n 12",
     "cert": "for d in /etc/letsencrypt/live/*/cert.pem; do openssl x509 -enddate -noout -in $d 2>/dev/null; done",
+    "ports": "ss -tlnpH 2>/dev/null || ss -tlnp 2>/dev/null",
 }
 
 KNOWN_IPS = {"10.", "192.168.", "172.", "127."}
+
+
+def parse_ports(out: str) -> list[dict]:
+    """ss -tlnp 输出 → [{port, addr, proc}]（与 agent 上报同结构）。
+    -H 无表头；旧 ss 无 -H 时跳过表头行。进程列可能缺（无 -p 权限）。"""
+    ports = []
+    seen = set()
+    for line in out.splitlines():
+        if not line.strip() or line.startswith(("State", "Netid")):
+            continue
+        fields = line.split()
+        if len(fields) < 4 or fields[0].lower() not in ("listen",):
+            continue
+        local = fields[3] if not line.startswith("LISTEN") else fields[3]
+        # 形态：0.0.0.0:22 / [::]:22 / 127.0.0.1:631
+        if ":" not in local:
+            continue
+        addr, _, port_s = local.rpartition(":")
+        try:
+            port = int(port_s)
+        except ValueError:
+            continue
+        if port <= 0 or port > 65535 or (addr, port) in seen:
+            continue
+        seen.add((addr, port))
+        proc = ""
+        if len(fields) >= 6:
+            users = " ".join(fields[5:])
+            m = re.search(r'"([^"]+)"', users)
+            if m:
+                proc = m.group(1)
+        addr_disp = "::" if addr == "[::]" else addr
+        ports.append({"port": port, "addr": addr_disp, "proc": proc})
+    ports.sort(key=lambda x: x["port"])
+    return ports[:64]
 
 
 def parse_probe(out: str) -> dict:
@@ -98,8 +135,9 @@ async def probe_real(host: dict) -> tuple[dict | None, dict]:
         r = await conn.run(PROBE_SCRIPT, check=True)
         base = parse_probe(r.stdout)
         # 键恒存在：单个探针失败（精简发行版缺 last/openssl 等）时前端拿到的 extras 结构仍完整
-        extras: dict = {"failed_services": [], "logins": [], "suspicious_logins": [], "cert_days_left": None}
-        for key in ("top_proc", "failed_services", "logins", "cert"):
+        extras: dict = {"failed_services": [], "logins": [], "suspicious_logins": [],
+                        "cert_days_left": None, "ports": []}
+        for key in ("top_proc", "failed_services", "logins", "cert", "ports"):
             try:  # 精简发行版可能缺 last/openssl 等，单探针缺失不拖垮采集
                 r = await conn.run(DETAIL_PROBES[key], check=True)
             except Exception:
@@ -113,6 +151,8 @@ async def probe_real(host: dict) -> tuple[dict | None, dict]:
                 extras["logins"], extras["suspicious_logins"] = recent, susp
             elif key == "cert":
                 extras["cert_days_left"] = parse_cert_days(r.stdout)
+            elif key == "ports":
+                extras["ports"] = parse_ports(r.stdout)
         return base, extras
     finally:
         conn.close()
