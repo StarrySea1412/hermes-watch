@@ -57,8 +57,10 @@ export function SectionNav({ sections }: { sections: readonly SectionDef[] }) {
 export function SectionRail({ sections }: { sections: readonly SectionDef[] }) {
   const active = useScrollSpy(sections)
   return (
-    <aside className="hidden xl:block w-44 shrink-0">
-      <div className="sticky top-6 flex flex-col gap-0.5">
+    // sticky 必须挂在 flex 子项（aside）本身：外层 xl:items-start 把 aside 压成
+    // 内容高，sticky 写在内层会因没有滚动行程而失效
+    <aside className="hidden xl:block w-44 shrink-0 self-start sticky top-6">
+      <div className="flex flex-col gap-0.5">
         {sections.map(s => {
           const on = active === s.id
           return (
