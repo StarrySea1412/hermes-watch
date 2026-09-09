@@ -2,6 +2,7 @@
 import asyncio
 import json
 import math
+import os
 import pathlib
 import re
 import time
@@ -318,7 +319,6 @@ async def set_settings(payload: dict):
 
 
 # ---------- notification channels ----------
-
 @app.get("/api/notify/channels")
 def notify_channels():
     return {"labels": notify.LABELS, "configured": notify.configured(),
@@ -756,4 +756,35 @@ def mcp_tools():
 
 def run():
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8800, log_level="warning")
+    # 生产容器内监听 0.0.0.0（HW_LISTEN 覆盖时生效）；本机默认仍只听 127.0.0.1
+    host = os.environ.get("HW_LISTEN", "127.0.0.1")
+    uvicorn.run(app, host=host, port=8800, log_level="warning")
+
+
+# ---------- 生产模式：单进程托管前端构建产物（frontend dist 同仓部署）----------
+# 约定目录：backend/static（构建后拷入）或仓库根 frontend/dist。存在即启用；
+# /api、/ws、/status 路由优先，其余 GET 落 SPA 的 index.html（前端路由接管）。
+_DIST_DIRS = [
+    pathlib.Path(__file__).resolve().parent.parent / "static",
+    pathlib.Path(__file__).resolve().parent.parent.parent / "frontend" / "dist",
+]
+_dist = next((d for d in _DIST_DIRS if (d / "index.html").exists()), None)
+if _dist is not None:
+    from fastapi.staticfiles import StaticFiles
+
+    assets = _dist / "assets"
+    if assets.exists():
+        app.mount("/assets", StaticFiles(directory=assets), name="assets")
+
+    @app.get("/{spa_path:path}", include_in_schema=False)
+    async def spa_fallback(spa_path: str):
+        # /api 与 /status 前缀永不落入 SPA（交给 REST/状态页路由处理）
+        if spa_path.startswith(("api/", "status/")) or spa_path in ("api", "status"):
+            raise HTTPException(404, "Not Found")
+        candidate = (_dist / spa_path).resolve()
+        if spa_path and candidate.is_file() and candidate.is_relative_to(_dist.resolve()):
+            ct = {".svg": "image/svg+xml", ".webmanifest": "application/manifest+json",
+                  ".js": "application/javascript", ".png": "image/png", ".ico": "image/x-icon",
+                  ".html": "text/html; charset=utf-8"}.get(candidate.suffix, "application/octet-stream")
+            return HTMLResponse(candidate.read_bytes(), media_type=ct)
+        return HTMLResponse((_dist / "index.html").read_bytes(), media_type="text/html; charset=utf-8")

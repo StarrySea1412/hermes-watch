@@ -1,0 +1,8 @@
+frontend/node_modules
+backend/venv
+backend/hermes-watch.db*
+backend/.secret_key
+backend/e2e_*.log
+gui-test-screenshots
+agent-go/*.exe
+agent-go/hermes-watch-agent-*

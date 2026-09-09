@@ -39,6 +39,8 @@ npm install
 npm run dev                          # http://localhost:5273
 ```
 
+**生产模式（单进程）**：`cd frontend && npm run build`，后端自动托管 `frontend/dist`——重启后端后直接访问 `http://127.0.0.1:8800` 即是完整面板（SPA 路由/静态资源/PWA 全部就绪），无需第二个进程。**Docker**：`docker build -t hermes-watch . && docker run -p 8800:8800 -v hermes-data:/data hermes-watch`（数据与密钥持久化在 `/data` 卷，`HW_DATA_DIR` 可重定向）。CI：GitHub Actions 每次 push 自动跑 86 项回归 + 前端构建 + agent 三平台编译检查；打 `v*` tag 自动发布 agent 二进制到 Release。
+
 首次启动自动播种 4 台演示主机（web-1 健康 / db-1 磁盘填满 / app-1 内存泄漏 / cache-1 可疑登录），并自动触发诊断。
 
 ## 演示故事线（3 分钟）

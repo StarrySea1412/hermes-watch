@@ -1,11 +1,14 @@
 """SQLite storage. Keep it dependency-free; WAL for concurrent reader (API) + writer (scheduler)."""
 import json
+import os
 import sqlite3
 import threading
 import time
 from pathlib import Path
 
-DB_PATH = Path(__file__).resolve().parent.parent / "hermes-watch.db"
+# 数据目录可经 HW_DATA_DIR 重定向（Docker 挂卷 /data）；默认仍是 backend/ 下
+_DATA_DIR = Path(os.environ.get("HW_DATA_DIR") or Path(__file__).resolve().parent.parent)
+DB_PATH = _DATA_DIR / "hermes-watch.db"
 _lock = threading.Lock()
 
 SCHEMA = """

@@ -1,13 +1,16 @@
 """SSH 凭据静态加密：Fernet（cryptography 随 asyncssh 安装，零新增依赖）。
 
-主密钥存 backend/.secret_key（不入库、不进前端）；DB 单独泄露拿不到密码。
+主密钥存 .secret_key（不入库、不进前端）；DB 单独泄露拿不到密码。
 入库格式 enc:v1:<token>，历史明文由 init_db 的一次性迁移就地加密。
+密钥位置跟随 HW_DATA_DIR（Docker 挂卷持久化），与 SQLite 同目录。
 """
 import base64
 import os
 import pathlib
 
-KEY_PATH = pathlib.Path(__file__).resolve().parent.parent / ".secret_key"
+from .db import _DATA_DIR
+
+KEY_PATH = _DATA_DIR / ".secret_key"
 PREFIX = "enc:v1:"
 
 _fernet = None

@@ -420,6 +420,7 @@ def render_status_page(snap: dict) -> str:
     for h in hosts:
         l = h.get("latest") or {}
         label, c = STATUS_LABEL.get(h["status"], STATUS_LABEL["ok"])
+        up = h.get("uptime")
         def _bar(v, name):
             if v is None:
                 return ""
@@ -427,9 +428,10 @@ def render_status_page(snap: dict) -> str:
             return (f'<div class="metric"><span>{name}</span>'
                     f'<div class="bar"><i style="width:{min(100, v):.0f}%;background:var(--m-{name.lower()})"></i></div>'
                     f'<b class="{"hot" if hot else ""}">{v:.0f}%</b></div>')
+        up_html = (f'<span class="up">24h 在线 {up:.1f}%</span>' if up is not None else "")
         cards.append(f"""
       <div class="host">
-        <div class="hrow"><b>{html.escape(h['name'])}</b>
+        <div class="hrow"><b>{html.escape(h['name'])}</b>{up_html}
           <span class="chip" style="color:{c};border-color:{c}55;background:{c}18">{label}</span>
           <span class="score" style="color:{c}">{h['score']}</span></div>
         {_bar(l.get('cpu'), 'CPU')}{_bar(l.get('mem'), '内存')}{_bar(l.get('disk'), '磁盘')}
@@ -467,6 +469,7 @@ def render_status_page(snap: dict) -> str:
   .host {{ background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px 16px; margin-bottom:10px; }}
   .hrow {{ display:flex; align-items:center; gap:10px; margin-bottom:8px; }}
   .hrow b {{ font-size:15px; }}
+  .hrow .up {{ font-size:11px; color:var(--mute); font-variant-numeric:tabular-nums; }}
   .chip {{ margin-left:auto; font-size:11px; padding:2px 9px; border-radius:99px; border:1px solid; }}
   .score {{ font-size:18px; font-weight:700; font-variant-numeric:tabular-nums; }}
   .metric {{ display:flex; align-items:center; gap:10px; margin-top:5px; font-size:12px; color:var(--mute); }}

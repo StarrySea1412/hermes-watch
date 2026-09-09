@@ -457,7 +457,8 @@ def top_findings(limit=10) -> list[dict]:
 
 def fleet_snapshot() -> dict:
     hosts = db.query("SELECT * FROM hosts ORDER BY id")
-    out = []
+    if not hosts:
+        return {"hosts": [], "generated_at": db.now()}
     poll = 60
     try:
         r = db.query_one("SELECT value FROM settings WHERE key='poll_seconds'")
@@ -466,19 +467,37 @@ def fleet_snapshot() -> dict:
         pass
     # 超过 3 个巡检周期无成功采集 → 离线（agent push 主机同样适用）
     offline_after = poll * 3
+    now_ts = db.now()
+    ids = [h["id"] for h in hosts]
+    marks = ",".join("?" * len(ids))
+    # 批量预取（原每主机 3 发 SQL → 共 3 发，主机多时避免 N+1）
+    latest_by: dict[int, dict] = {}
+    for m in db.query(
+            f"SELECT m.* FROM metrics m JOIN (SELECT host_id, MAX(ts) AS mx FROM metrics "
+            f"WHERE host_id IN ({marks}) GROUP BY host_id) t ON m.host_id=t.host_id AND m.ts=t.mx", ids):
+        latest_by[m["host_id"]] = m
+    spark_by: dict[int, list] = {}
+    for m in db.query(
+            f"SELECT host_id, ts, disk, mem, cpu FROM metrics WHERE host_id IN ({marks}) "
+            f"ORDER BY ts DESC LIMIT {len(ids) * 30}", ids):
+        if len(spark_by.setdefault(m["host_id"], [])) < 30:
+            spark_by[m["host_id"]].append(m)
+    findings_by: dict[int, list] = {}
+    for f in db.query(
+            f"SELECT * FROM findings WHERE host_id IN ({marks}) AND status IN ('open','analyzed')", ids):
+        findings_by.setdefault(f["host_id"], []).append(f)
+    out = []
     for h in hosts:
-        latest = db.query_one(
-            "SELECT * FROM metrics WHERE host_id=? ORDER BY ts DESC LIMIT 1", (h["id"],))
-        spark = db.query(
-            "SELECT disk, mem, cpu FROM metrics WHERE host_id=? ORDER BY ts DESC LIMIT 30", (h["id"],))
-        findings = db.query(
-            "SELECT * FROM findings WHERE host_id=? AND status IN ('open','analyzed')", (h["id"],))
+        h_id = h["id"]
+        latest = latest_by.get(h_id)
+        spark = list(reversed(spark_by.get(h_id, [])))
+        findings = findings_by.get(h_id, [])
         score = rules.health_score(findings)
         worst = max((f["severity"] for f in findings),
                     key=rules.severity_rank, default=None)
         last_ok = h["last_ok_ts"] or 0
         if last_ok:
-            online = (db.now() - last_ok) < offline_after
+            online = (now_ts - last_ok) < offline_after
         else:  # 从未成功采集：有采集错误记为离线，全新主机（如刚播种）不算离线
             online = not (h["last_error"] or "")
         # 卡片状态跟随最严重发现：crit 发现即使分数未跌破也标红，避免"99% 磁盘显示警告"的矛盾
@@ -491,10 +510,38 @@ def fleet_snapshot() -> dict:
             "score": score, "status": status,
             "online": online, "last_ok_ts": last_ok,
             "last_error": h["last_error"] or "",
+            "silenced_until": h["silenced_until"] or 0,
             "latest": dict(latest) if latest else None,
             "spark": list(reversed([dict(x) for x in spark])),
             "open_findings": len(findings),
             "worst": worst,
+            "uptime": heartbeat_uptime(h["id"], now_ts),
         })
     return {"hosts": out,
-            "generated_at": db.now()}
+            "generated_at": now_ts}
+
+
+def heartbeat_uptime(host_id: int, now_ts: float | None = None) -> float | None:
+    """近 24h 采集成功率（%）：数据点覆盖窗口近似——相邻点间隔 ≤3×周期 视为在线段。
+    无数据返回 None（状态页/前端显示 —）。"""
+    now_ts = now_ts or db.now()
+    window = 86400
+    rows = db.query(
+        "SELECT ts FROM metrics WHERE host_id=? AND ts>? ORDER BY ts", (host_id, now_ts - window))
+    if len(rows) < 2:
+        return None
+    r = db.query_one("SELECT value FROM settings WHERE key='poll_seconds'")
+    try:
+        poll = max(5, int(float(r["value"]))) if r else 60
+    except (TypeError, ValueError):
+        poll = 60
+    gap_limit = poll * 3
+    covered = 0.0
+    prev = max(rows[0]["ts"], now_ts - window)
+    for row in rows[1:]:
+        ts = row["ts"]
+        if ts - prev <= gap_limit:  # 间隙在容许内 → 这段都在线
+            covered += ts - prev
+        prev = ts
+    covered += now_ts - prev if now_ts - prev <= gap_limit else gap_limit
+    return round(min(100.0, covered / window * 100), 1)

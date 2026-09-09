@@ -8,6 +8,7 @@ export type HostCard = {
   latest: { cpu: number; mem: number; disk: number; load1: number; net_in: number; net_out: number; ts: number } | null
   spark: { disk: number; mem: number; cpu: number }[]
   open_findings: number; worst: 'crit' | 'warn' | 'info' | null
+  uptime?: number | null
 }
 export type Finding = {
   id: number; host_id: number; host_name?: string; ts: number

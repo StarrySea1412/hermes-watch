@@ -1,0 +1,32 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  agent-binaries:
+    name: 交叉编译出站 Agent
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - name: 编译（ldflags 去符号减体积）
+        working-directory: agent-go
+        run: |
+          for t in "linux amd64" "linux arm64" "windows amd64"; do
+            set -- $t
+            GOOS=$1 GOARCH=$2 CGO_ENABLED=0 \
+              go build -trimpath -ldflags "-s -w" \
+              -o "hermes-watch-agent-$1-$2${2:+$([ "$1" = windows ] && echo .exe)}" .
+          done
+      - name: 发布到 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: agent-go/hermes-watch-agent-*
+          generate_release_notes: true

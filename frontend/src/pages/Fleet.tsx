@@ -173,7 +173,9 @@ export default function Fleet() {
               </div>
               <div className="mt-2"><Spark data={h.spark} metric="disk" color={color} /></div>
               <div className="text-[11px] text-[var(--text-faint)] mt-1.5 flex justify-between">
-                <span>发现 <span className={h.open_findings ? 'text-[var(--warn)] font-semibold' : ''}>{h.open_findings}</span></span>
+                <span>发现 <span className={h.open_findings ? 'text-[var(--warn)] font-semibold' : ''}>{h.open_findings}</span>
+                  {h.uptime != null && <span className="ml-1.5 text-[var(--text-faint)]">· 24h 在线 {h.uptime}%</span>}
+                </span>
                 <span className={h.status === 'offline' ? 'text-[var(--crit)]' : ''}>
                   {h.status === 'offline'
                     ? `失联 · 最后采集 ${fmtTime(h.last_ok_ts || h.latest?.ts || 0).slice(-8)}`
