@@ -92,4 +92,4 @@ npm run dev                          # http://localhost:5273
 - [x] 告警生命周期层（对标 Uptime Kuma / Gatus / Netdata，见 `docs/竞品调研.md`）：告警自动恢复 + 恢复通知带持续时长、阈值滞后双阈值防抖、crit 持续告警周期重发、免打扰时段（跨午夜）、主机离线检测与可视化、6 渠道通知（企业微信/钉钉/飞书/Telegram/Server酱/通用 Webhook，设置页可测活 + 发送留痕）
 - [x] AI 对话流式输出（SSE 逐 token，LLM 关闭自动降级本地规则引擎摘要）+ LLM 出站脱敏（k8sgpt 式 anonymize：主机名/IP/用户名出站前替换占位符，映射不落盘，回答映射回真实名）
 - [x] 巡检心跳条带图（主机详情 48 桶上下状态带）+ PWA 可安装（manifest + service worker，仅生产注册）+ 公开状态页（设置页一键生成带 token 只读分享链接，60s 自动刷新，不含地址/凭据/证据，可随时撤销）+ i18n 骨架（自建零依赖翻译层，PageHead 一键切 EN/中文，未覆盖文案自动回落）
-- [ ] 多用户与 RBAC（当前为单机单租户）
+- [x] 多用户与 RBAC（admin/observer 角色：users 表 + 角色签名会话 + observer 只读拦截；存量单口令兼容自动 admin）
