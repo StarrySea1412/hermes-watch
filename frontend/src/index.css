@@ -270,6 +270,17 @@ html.light { --accent-strong-hover: rgba(8, 145, 178, 0.16); }
 .stream-cursor { display: inline-block; color: var(--accent); animation: cursor-blink 1s steps(1) infinite; margin-left: 1px; }
 @keyframes cursor-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
 
+/* ---------- datalist 自动补全指示箭头主题化 ----------
+   原生黑色实心三角与设计语言冲突：替换为全站同款线条 chevron（灰，双主题可读）。
+   Chrome/Edge 支持；Firefox 不暴露该伪元素，回落原生箭头（渐进增强）。 */
+input[list]::-webkit-calendar-picker-indicator {
+  width: 16px; height: 16px; margin-left: 4px;
+  background: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238a94a6' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") center/13px no-repeat;
+  opacity: .75; cursor: pointer; transition: opacity .15s;
+}
+input[list]:hover::-webkit-calendar-picker-indicator,
+input[list]:focus::-webkit-calendar-picker-indicator { opacity: 1; }
+
 /* 弹窗缩放入场 */
 .pop-in { animation: pop .22s cubic-bezier(.2,.7,.3,1); }
 @keyframes pop { from { opacity: 0; transform: scale(.94) translateY(8px); } to { opacity: 1; transform: none; } }

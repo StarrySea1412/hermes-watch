@@ -3,6 +3,7 @@ import { api, fmtTime, subscribe, type Host } from '../api'
 import { PageHead } from '../ui'
 import { Ic } from '../icons'
 import { UserAdd } from './UserAdd'
+import { SectionNav, SectionHead } from './SectionNav'
 
 const THRESHOLD_FIELDS: { key: string; label: string; hint: string }[] = [
   { key: 'disk_warn', label: '磁盘警告 %', hint: '默认 85' },
@@ -23,6 +24,15 @@ const NOTIFY_LABELS: Record<string, string> = {
   wecom: '企业微信', dingtalk: '钉钉', feishu: '飞书',
   telegram: 'Telegram', serverchan: 'Server酱', webhook: '通用 Webhook',
 }
+
+// ---------- 设置页分区导航 ----------
+const SECTIONS = [
+  { id: 'sec-inspect', label: '巡检与告警', icon: 'activity' as const },
+  { id: 'sec-ai', label: 'AI 外发', icon: 'sparkles' as const },
+  { id: 'sec-notify', label: '通知与分享', icon: 'bell' as const },
+  { id: 'sec-hosts', label: '主机与接入', icon: 'server' as const },
+  { id: 'sec-security', label: '安全与用户', icon: 'shield' as const },
+] as const
 
 export default function Settings() {
   const [hosts, setHosts] = useState<Host[]>([])
@@ -92,7 +102,10 @@ export default function Settings() {
       load()
     } catch (e: any) { setMsg(`✕ ${e.message}`) }
   }
-  const del = async (h: Host) => { await api(`/hosts/${h.id}`, { method: 'DELETE' }); load() }
+  const del = async (h: Host) => {
+    if (!confirm(`删除主机 ${h.name}？其全部指标/发现/提案/事件将一并删除，不可恢复。`)) return
+    await api(`/hosts/${h.id}`, { method: 'DELETE' }); load()
+  }
   const saveProvider = (patch: any) => {
     const next = { ...provider, ...patch }
     setProvider(next)
@@ -148,8 +161,11 @@ export default function Settings() {
 
   return (
     <div className="fade-in max-w-5xl">
-      <PageHead title="设置" sub="主机清单 · 告警阈值 · AI 安全开关（默认关）· 通知通道" />
+      <PageHead title="设置" sub="巡检告警 · AI 外发 · 通知分享 · 主机接入 · 安全用户" />
+      <SectionNav sections={SECTIONS} />
 
+      <section>
+      <SectionHead id="sec-inspect" icon="activity" label="巡检与告警" />
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* 告警阈值 */}
         <div className="card p-5">
@@ -182,9 +198,8 @@ export default function Settings() {
           </div>
         </div>
 
-        {/* 自动报告 + AI 开关 + 提案执行 */}
-        <div className="space-y-4">
-          <div className="card p-5">
+        {/* 提案执行（写操作总闸，与阈值并列展示） */}
+        <div className="card p-5">
             <div className="flex items-start justify-between">
               <div>
                 <h3 className="font-semibold text-[14.5px] text-[var(--text-hi)]">提案执行</h3>
@@ -200,102 +215,7 @@ export default function Settings() {
                 {execOn ? '● 允许执行' : '○ 已关闭'}
               </button>
             </div>
-          </div>
-
-          <div className="card p-5">
-            <div className="flex items-start justify-between">
-              <div>
-                <h3 className="font-semibold text-[14.5px] text-[var(--text-hi)]">访问控制</h3>
-                <p className="text-[12px] text-[var(--text-faint)] mt-1.5 leading-relaxed">
-                  为面板加一道口令（PBKDF2 存储 + 签名 Cookie 会话）。出站 Agent 与本地 MCP 不受影响，各自走自己的通道。
-                </p>
-              </div>
-              <span className="pill shrink-0" style={authOn
-                ? { background: 'var(--ok-bg)', color: 'var(--ok)' }
-                : { background: 'var(--neutral-bg)', color: 'var(--text-mute)' }}>
-                {authOn ? '● 已开启' : '○ 已关闭'}
-              </span>
-            </div>
-            {!authOn && (
-              <div className="flex flex-col sm:flex-row gap-2.5 mt-3.5">
-                <input className="input" type="password" placeholder="设置面板口令（≥4 位）" value={authPw}
-                  onChange={e => setAuthPw(e.target.value)} />
-                <button className="btn btn-primary shrink-0" disabled={!authPw}
-                  onClick={() => api('/auth/enable', { method: 'POST', body: JSON.stringify({ password: authPw }) })
-                    .then(() => { setAuthPw(''); setAuthMsg('✓ 已开启，下次访问需登录'); load() })
-                    .catch(e => setAuthMsg(`✕ ${e.message}`))}>启用</button>
-              </div>
-            )}
-            {authOn && (
-              <div className="mt-3.5 space-y-2.5">
-                <div className="flex flex-col sm:flex-row gap-2.5">
-                  <input className="input" type="password" placeholder="当前口令" value={authOld}
-                    onChange={e => setAuthOld(e.target.value)} />
-                  <input className="input" type="password" placeholder="新口令（≥4 位）" value={authPw}
-                    onChange={e => setAuthPw(e.target.value)} />
-                  <button className="btn shrink-0" disabled={!authOld || !authPw}
-                    onClick={() => api('/auth/change', { method: 'POST', body: JSON.stringify({ old: authOld, new: authPw }) })
-                      .then(() => { setAuthPw(''); setAuthOld(''); setAuthMsg('✓ 口令已更换') })
-                      .catch(e => setAuthMsg(`✕ ${e.message}`))}>修改口令</button>
-                </div>
-                <div className="flex flex-col sm:flex-row gap-2.5">
-                  <button className="btn btn-ghost shrink-0" onClick={() => api('/auth/logout', { method: 'POST' }).then(() => { location.href = '/login' })}>退出登录</button>
-                  <input className="input" type="password" placeholder="输入当前口令以关闭访问控制" value={authOld}
-                    onChange={e => setAuthOld(e.target.value)} />
-                  <button className="btn shrink-0" disabled={!authOld}
-                    onClick={() => api('/auth/disable', { method: 'POST', body: JSON.stringify({ password: authOld }) })
-                      .then(() => { setAuthOld(''); setAuthPw(''); setAuthMsg(''); load() })
-                      .catch(e => setAuthMsg(`✕ ${e.message}`))}>关闭访问控制</button>
-                </div>
-              </div>
-            )}
-            {authMsg && <div className="text-[12px] mt-2.5 text-[var(--text-mute)]">{authMsg}</div>}
-          </div>
-
-          {/* 用户管理（admin）：多用户 + 角色分发 */}
-          {authOn && authRole === 'admin' && (
-            <div className="card p-5">
-              <div className="flex items-center gap-2.5 mb-1.5">
-                <h3 className="font-semibold text-[14.5px] text-[var(--text-hi)]">用户管理</h3>
-                <span className="pill" style={{ background: 'var(--accent-dim)', color: 'var(--accent)', fontSize: 10 }}>admin</span>
-              </div>
-              <p className="text-[12px] text-[var(--text-faint)] mb-3 leading-relaxed">
-                {legacyPw
-                  ? '当前仍是单口令模式：添加第一个用户后，面板口令登录自动停用，改为账号登录（现有口令保持可用直至删除该模式）。'
-                  : 'admin 可写（配置/审批/执行），observer 只读（看板/报告/终端，写操作被拒绝）。'}
-              </p>
-              <div className="space-y-1.5 mb-3">
-                {users.map(u => (
-                  <div key={u.id} className="flex items-center gap-2.5 text-[13px] inset px-3 py-2">
-                    <span className="font-semibold text-[var(--text-hi)]">{u.username}</span>
-                    <span className="pill text-[10px]" style={u.role === 'admin'
-                      ? { background: 'var(--accent-dim)', color: 'var(--accent)' }
-                      : { background: 'var(--neutral-bg)', color: 'var(--text-mute)' }}>{u.role}</span>
-                    <div className="ml-auto flex items-center gap-2.5">
-                      <button className="text-[11.5px] text-[var(--text-faint)] hover:text-[var(--accent)]"
-                        onClick={() => {
-                          const role = u.role === 'admin' ? 'observer' : 'admin'
-                          api(`/auth/users/${u.id}/role`, { method: 'POST', body: JSON.stringify({ role }) }).then(load)
-                        }}>改为 {u.role === 'admin' ? 'observer' : 'admin'}</button>
-                      <button className="text-[11.5px] text-[var(--text-faint)] hover:text-[var(--crit)]"
-                        onClick={() => confirm(`删除用户 ${u.username}？`) &&
-                          api(`/auth/users/${u.id}`, { method: 'DELETE' }).then(load).catch(e => alert(e.message))}>删除</button>
-                    </div>
-                  </div>
-                ))}
-                {!users.length && <div className="text-[11.5px] text-[var(--text-faint)]">还没有账号，添加第一个以启用多用户模式</div>}
-              </div>
-              <UserAdd onAdded={load} />
-            </div>
-          )}
-
-          {/* observer 只读提示 */}
-          {authOn && authRole === 'observer' && (
-            <div className="card p-4 mb-4 flex items-center gap-3" style={{ background: 'var(--warn-bg)', borderColor: 'var(--warn-border)' }}>
-              <span style={{ color: 'var(--warn)' }}><Ic name="search" size={16} /></span>
-              <span className="text-[12.5px] text-[var(--text)]">你以 <b>observer（只读）</b>身份登录——面板可看，配置/审批/执行等写操作已禁用。</span>
-            </div>
-          )}
+        </div>
 
           <div className="card p-5">
             <div className="flex items-start justify-between">
@@ -313,11 +233,11 @@ export default function Settings() {
               </button>
             </div>
           </div>
-
-        </div>
       </div>
+      </section>
 
-      {/* AI 外发：全宽大卡片 */}
+      <section>
+      <SectionHead id="sec-ai" icon="sparkles" label="AI 外发" />
       <div className="card p-5 mt-4">
         <div className="flex items-start justify-between">
           <div>
@@ -407,6 +327,11 @@ export default function Settings() {
         </p>
       </div>
 
+      </section>
+
+      {/* ═══ ③ 通知与分享 ═══ */}
+      <section>
+      <SectionHead id="sec-notify" icon="bell" label="通知与分享" />
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">
         <div className="card p-5">
           <div className="flex items-center gap-2.5 mb-1.5">
@@ -537,6 +462,10 @@ export default function Settings() {
         </div>
       </div>
 
+      </section>
+
+      <section>
+      <SectionHead id="sec-hosts" icon="server" label="主机与接入" />
       <div className="card p-5 mt-4">
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-semibold text-[14.5px] text-[var(--text-hi)]">主机清单</h3>
@@ -604,6 +533,110 @@ export default function Settings() {
           演示主机数据由内置模拟器生成，用于故事复现。
         </p>
       </div>
+
+      </section>
+
+      {/* ═══ ⑤ 安全与用户 ═══ */}
+      <section>
+      <SectionHead id="sec-security" icon="shield" label="安全与用户" />
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
+          <div className="card p-5">
+            <div className="flex items-start justify-between">
+              <div>
+                <h3 className="font-semibold text-[14.5px] text-[var(--text-hi)]">访问控制</h3>
+                <p className="text-[12px] text-[var(--text-faint)] mt-1.5 leading-relaxed">
+                  为面板加一道口令（PBKDF2 存储 + 签名 Cookie 会话）。出站 Agent 与本地 MCP 不受影响，各自走自己的通道。
+                </p>
+              </div>
+              <span className="pill shrink-0" style={authOn
+                ? { background: 'var(--ok-bg)', color: 'var(--ok)' }
+                : { background: 'var(--neutral-bg)', color: 'var(--text-mute)' }}>
+                {authOn ? '● 已开启' : '○ 已关闭'}
+              </span>
+            </div>
+            {!authOn && (
+              <div className="flex flex-col sm:flex-row gap-2.5 mt-3.5">
+                <input className="input" type="password" placeholder="设置面板口令（≥4 位）" value={authPw}
+                  onChange={e => setAuthPw(e.target.value)} />
+                <button className="btn btn-primary shrink-0" disabled={!authPw}
+                  onClick={() => api('/auth/enable', { method: 'POST', body: JSON.stringify({ password: authPw }) })
+                    .then(() => { setAuthPw(''); setAuthMsg('✓ 已开启，下次访问需登录'); load() })
+                    .catch(e => setAuthMsg(`✕ ${e.message}`))}>启用</button>
+              </div>
+            )}
+            {authOn && (
+              <div className="mt-3.5 space-y-2.5">
+                <div className="flex flex-col sm:flex-row gap-2.5">
+                  <input className="input" type="password" placeholder="当前口令" value={authOld}
+                    onChange={e => setAuthOld(e.target.value)} />
+                  <input className="input" type="password" placeholder="新口令（≥4 位）" value={authPw}
+                    onChange={e => setAuthPw(e.target.value)} />
+                  <button className="btn shrink-0" disabled={!authOld || !authPw}
+                    onClick={() => api('/auth/change', { method: 'POST', body: JSON.stringify({ old: authOld, new: authPw }) })
+                      .then(() => { setAuthPw(''); setAuthOld(''); setAuthMsg('✓ 口令已更换') })
+                      .catch(e => setAuthMsg(`✕ ${e.message}`))}>修改口令</button>
+                </div>
+                <div className="flex flex-col sm:flex-row gap-2.5">
+                  <button className="btn btn-ghost shrink-0" onClick={() => api('/auth/logout', { method: 'POST' }).then(() => { location.href = '/login' })}>退出登录</button>
+                  <input className="input" type="password" placeholder="输入当前口令以关闭访问控制" value={authOld}
+                    onChange={e => setAuthOld(e.target.value)} />
+                  <button className="btn shrink-0" disabled={!authOld}
+                    onClick={() => api('/auth/disable', { method: 'POST', body: JSON.stringify({ password: authOld }) })
+                      .then(() => { setAuthOld(''); setAuthPw(''); setAuthMsg(''); load() })
+                      .catch(e => setAuthMsg(`✕ ${e.message}`))}>关闭访问控制</button>
+                </div>
+              </div>
+            )}
+            {authMsg && <div className="text-[12px] mt-2.5 text-[var(--text-mute)]">{authMsg}</div>}
+          </div>
+
+          {/* 用户管理（admin）：多用户 + 角色分发 */}
+          {authOn && authRole === 'admin' && (
+            <div className="card p-5">
+              <div className="flex items-center gap-2.5 mb-1.5">
+                <h3 className="font-semibold text-[14.5px] text-[var(--text-hi)]">用户管理</h3>
+                <span className="pill" style={{ background: 'var(--accent-dim)', color: 'var(--accent)', fontSize: 10 }}>admin</span>
+              </div>
+              <p className="text-[12px] text-[var(--text-faint)] mb-3 leading-relaxed">
+                {legacyPw
+                  ? '当前仍是单口令模式：添加第一个用户后，面板口令登录自动停用，改为账号登录（现有口令保持可用直至删除该模式）。'
+                  : 'admin 可写（配置/审批/执行），observer 只读（看板/报告/终端，写操作被拒绝）。'}
+              </p>
+              <div className="space-y-1.5 mb-3">
+                {users.map(u => (
+                  <div key={u.id} className="flex items-center gap-2.5 text-[13px] inset px-3 py-2">
+                    <span className="font-semibold text-[var(--text-hi)]">{u.username}</span>
+                    <span className="pill text-[10px]" style={u.role === 'admin'
+                      ? { background: 'var(--accent-dim)', color: 'var(--accent)' }
+                      : { background: 'var(--neutral-bg)', color: 'var(--text-mute)' }}>{u.role}</span>
+                    <div className="ml-auto flex items-center gap-2.5">
+                      <button className="text-[11.5px] text-[var(--text-faint)] hover:text-[var(--accent)]"
+                        onClick={() => {
+                          const role = u.role === 'admin' ? 'observer' : 'admin'
+                          api(`/auth/users/${u.id}/role`, { method: 'POST', body: JSON.stringify({ role }) }).then(load)
+                        }}>改为 {u.role === 'admin' ? 'observer' : 'admin'}</button>
+                      <button className="text-[11.5px] text-[var(--text-faint)] hover:text-[var(--crit)]"
+                        onClick={() => confirm(`删除用户 ${u.username}？`) &&
+                          api(`/auth/users/${u.id}`, { method: 'DELETE' }).then(load).catch(e => alert(e.message))}>删除</button>
+                    </div>
+                  </div>
+                ))}
+                {!users.length && <div className="text-[11.5px] text-[var(--text-faint)]">还没有账号，添加第一个以启用多用户模式</div>}
+              </div>
+              <UserAdd onAdded={load} />
+            </div>
+          )}
+
+          {/* observer 只读提示 */}
+          {authOn && authRole === 'observer' && (
+            <div className="card p-4 mb-4 flex items-center gap-3" style={{ background: 'var(--warn-bg)', borderColor: 'var(--warn-border)' }}>
+              <span style={{ color: 'var(--warn)' }}><Ic name="search" size={16} /></span>
+              <span className="text-[12.5px] text-[var(--text)]">你以 <b>observer（只读）</b>身份登录——面板可看，配置/审批/执行等写操作已禁用。</span>
+            </div>
+          )}
+      </div>
+
+      </section>
 
       {/* cc-switch 一键导入弹窗 */}
       {csOpen && (
