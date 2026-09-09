@@ -316,3 +316,35 @@ html.light { --accent-strong-hover: rgba(8, 145, 178, 0.16); }
     radial-gradient(circle at 50% 46%, var(--topo-glow), transparent 36%),
     repeating-radial-gradient(circle at 50% 46%, transparent 0, transparent 127px, var(--topo-ring) 127px, var(--topo-ring) calc(127px + 1px));
 }
+
+/* ---------- Markdown 渲染（AI 对话 .md-body）---------- */
+.md-body > :first-child { margin-top: 0; }
+.md-body > :last-child { margin-bottom: 0; }
+.md-body p { margin: 6px 0; }
+.md-body h1, .md-body h2, .md-body h3, .md-body h4 {
+  margin: 12px 0 6px; font-weight: 700; color: var(--text-hi); line-height: 1.4;
+}
+.md-body h1 { font-size: 16px; } .md-body h2 { font-size: 15px; } .md-body h3 { font-size: 14px; }
+.md-body ul, .md-body ol { margin: 6px 0; padding-left: 20px; }
+.md-body li { margin: 3px 0; }
+.md-body li::marker { color: var(--accent); }
+.md-body strong { color: var(--text-hi); font-weight: 650; }
+.md-body a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.md-body code {
+  font-family: var(--mono, ui-monospace, monospace); font-size: 12px;
+  background: var(--neutral-bg); border: 1px solid var(--border);
+  border-radius: 5px; padding: 1px 5px; color: var(--code-warn-text, var(--accent));
+}
+.md-body pre {
+  background: var(--term-bg, var(--neutral-bg)); border: 1px solid var(--border);
+  border-radius: 10px; padding: 10px 12px; overflow-x: auto; margin: 8px 0;
+}
+.md-body pre code { background: transparent; border: none; padding: 0; color: #8fa3bd; }
+.md-body blockquote {
+  margin: 8px 0; padding: 2px 12px; border-left: 3px solid var(--accent-border);
+  color: var(--text-mute); background: var(--neutral-bg); border-radius: 0 8px 8px 0;
+}
+.md-body table { border-collapse: collapse; margin: 8px 0; font-size: 12.5px; width: 100%; }
+.md-body th, .md-body td { border: 1px solid var(--border); padding: 5px 9px; text-align: left; }
+.md-body th { background: var(--neutral-bg); color: var(--text-mute); font-weight: 600; }
+.md-body hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }

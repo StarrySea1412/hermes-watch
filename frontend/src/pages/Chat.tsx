@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import ReactMarkdown from 'react-markdown'
 import { fmtTime } from '../api'
 import { Ic } from '../icons'
 import { PageHead } from '../ui'
@@ -173,8 +174,9 @@ export default function Chat() {
                   <span className="ml-auto text-[10.5px] text-[var(--text-faint)] num opacity-0 group-hover:opacity-100 transition-opacity">{fmtTime(m.ts)}</span>
                 </div>
                 <div className="card px-4 py-3 relative" style={{ borderRadius: '4px 18px 18px 18px' }}>
-                  <div className="text-[13.5px] leading-relaxed whitespace-pre-wrap text-[var(--text)]">
-                    {m.text}
+                  {/* LLM 输出按 Markdown 渲染（react-markdown 默认不渲染裸 HTML，安全） */}
+                  <div className="md-body text-[13.5px] leading-relaxed text-[var(--text)]">
+                    <ReactMarkdown>{m.text}</ReactMarkdown>
                     {m.streaming && <span className="stream-cursor">▍</span>}
                   </div>
                   <button title="复制回答" onClick={() => copyMsg(i, m.text)}
