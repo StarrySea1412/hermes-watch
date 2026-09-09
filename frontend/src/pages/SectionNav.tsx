@@ -1,12 +1,10 @@
 import { useEffect, useState } from 'react'
 import { Ic, type IconName } from '../icons'
 
-/** 设置页分区导航：滚动 spy 高亮当前分区，点击平滑滚动。
- * 布局为「分区头行」式（导航行内联在 PageHead 下方、不悬浮遮挡内容），
- * active 态由 main 滚动容器实时计算。 */
-export function SectionNav({ sections }: {
-  sections: readonly { id: string; label: string; icon: string }[]
-}) {
+export type SectionDef = { id: string; label: string; icon: string }
+
+/** 分区导航 hook：滚动 spy 高亮当前分区（main 滚动容器 + window 双保险） */
+function useScrollSpy(sections: readonly SectionDef[]) {
   const [active, setActive] = useState(sections[0]?.id ?? '')
   useEffect(() => {
     const onScroll = () => {
@@ -26,12 +24,17 @@ export function SectionNav({ sections }: {
       window.removeEventListener('scroll', onScroll)
     }
   }, [sections])
+  return active
+}
 
-  const jump = (id: string) => (e: React.MouseEvent) => {
-    e.preventDefault()
-    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }
+const jump = (id: string) => (e: React.MouseEvent) => {
+  e.preventDefault()
+  document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
 
+/** 横排药丸导航（窄屏回落） */
+export function SectionNav({ sections }: { sections: readonly SectionDef[] }) {
+  const active = useScrollSpy(sections)
   return (
     <div className="flex items-center gap-2 flex-wrap mb-1">
       {sections.map(s => {
@@ -47,6 +50,29 @@ export function SectionNav({ sections }: {
         )
       })}
     </div>
+  )
+}
+
+/** 右侧竖排锚点栏（宽屏）：sticky 跟随，当前分区左侧亮条 + 高亮 */
+export function SectionRail({ sections }: { sections: readonly SectionDef[] }) {
+  const active = useScrollSpy(sections)
+  return (
+    <aside className="hidden xl:block w-44 shrink-0">
+      <div className="sticky top-6 flex flex-col gap-0.5">
+        {sections.map(s => {
+          const on = active === s.id
+          return (
+            <a key={s.id} href={`#${s.id}`} onClick={jump(s.id)}
+              className="flex items-center gap-2 pl-3 pr-2 py-2 text-[12.5px] rounded-lg border-l-2 transition-colors"
+              style={on
+                ? { borderColor: 'var(--accent)', color: 'var(--accent)', background: 'var(--accent-dim)', fontWeight: 600 }
+                : { borderColor: 'var(--border)', color: 'var(--text-mute)' }}>
+              <Ic name={s.icon as IconName} size={13} /> {s.label}
+            </a>
+          )
+        })}
+      </div>
+    </aside>
   )
 }
 

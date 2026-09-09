@@ -3,7 +3,7 @@ import { api, fmtTime, subscribe, type Host } from '../api'
 import { PageHead } from '../ui'
 import { Ic } from '../icons'
 import { UserAdd } from './UserAdd'
-import { SectionNav, SectionHead } from './SectionNav'
+import { SectionNav, SectionRail, SectionHead } from './SectionNav'
 
 const THRESHOLD_FIELDS: { key: string; label: string; hint: string }[] = [
   { key: 'disk_warn', label: '磁盘警告 %', hint: '默认 85' },
@@ -160,9 +160,12 @@ export default function Settings() {
   }
 
   return (
-    <div className="fade-in max-w-5xl">
+    <div className="fade-in max-w-6xl xl:flex xl:gap-8 xl:items-start">
+      <div className="flex-1 min-w-0">
       <PageHead title="设置" sub="巡检告警 · AI 外发 · 通知分享 · 主机接入 · 安全用户" />
-      <SectionNav sections={SECTIONS} />
+      <div className="xl:hidden mb-1">
+        <SectionNav sections={SECTIONS} />
+      </div>
 
       <section>
       <SectionHead id="sec-inspect" icon="activity" label="巡检与告警" />
@@ -637,6 +640,9 @@ export default function Settings() {
       </div>
 
       </section>
+      </div>
+
+      <SectionRail sections={SECTIONS} />
 
       {/* cc-switch 一键导入弹窗 */}
       {csOpen && (
