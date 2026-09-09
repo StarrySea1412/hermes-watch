@@ -41,8 +41,13 @@ AUTH_OPEN = ("/api/auth/status", "/api/auth/login",
 async def panel_auth_middleware(request: Request, call_next):
     path = request.url.path
     if auth.enabled() and path.startswith("/api") and path not in AUTH_OPEN:
-        if not auth.verify_session(request.cookies.get(auth.COOKIE, "")):
+        role = auth.session_role(request.cookies.get(auth.COOKIE, ""))
+        if not role:
             return JSONResponse({"detail": "面板未登录"}, status_code=401)
+        # observer 只读：拦写方法；登录后的自身口令修改走专用端点不受影响
+        if role == "observer" and request.method not in ("GET", "HEAD", "OPTIONS") \
+                and not path.startswith("/api/auth/self"):
+            return JSONResponse({"detail": "观察者角色为只读，写操作需要管理员权限"}, status_code=403)
     return await call_next(request)
 
 _subs: set[asyncio.Queue] = set()
@@ -490,24 +495,113 @@ class ChangePwIn(BaseModel):
     new: str
 
 
+class LoginIn(BaseModel):
+    username: str = ""   # 多用户模式必填；legacy 单口令模式忽略
+    password: str
+
+
 @app.get("/api/auth/status")
 async def auth_status(request: Request):
-    return {"enabled": auth.enabled(),
-            "authenticated": auth.verify_session(request.cookies.get(auth.COOKIE, ""))}
+    role = auth.session_role(request.cookies.get(auth.COOKIE, ""))
+    return {"enabled": auth.enabled(), "authenticated": bool(role), "role": role,
+            "multi_user": auth.has_users()}
 
 
 @app.post("/api/auth/login")
-async def auth_login(p: PasswordIn, request: Request):
+async def auth_login(p: LoginIn, request: Request):
     ip = request.client.host if request.client else "?"
     if auth.too_many_fails(ip):
         raise HTTPException(429, "尝试过于频繁，请 1 分钟后再试")
-    if not auth.verify_password(p.password):
+    ok, role = auth.verify_login(p.username, p.password)
+    if not ok:
         auth.record_fail(ip)
         raise HTTPException(401, "口令错误")
-    resp = JSONResponse({"ok": True})
-    resp.set_cookie(auth.COOKIE, auth.make_session(), max_age=auth.TTL,
+    resp = JSONResponse({"ok": True, "role": role})
+    resp.set_cookie(auth.COOKIE, auth.make_session(role), max_age=auth.TTL,
                     httponly=True, samesite="lax", path="/")
     return resp
+
+
+# ---------- 用户管理（admin）----------
+
+class UserIn(BaseModel):
+    username: str
+    password: str
+    role: str = "observer"
+
+
+class RoleIn(BaseModel):
+    role: str
+
+
+def _require_admin(request: Request):
+    if not auth.enabled():
+        return  # 访问控制未开 = 单人本机模式，无需角色
+    if auth.session_role(request.cookies.get(auth.COOKIE, "")) != "admin":
+        raise HTTPException(403, "需要管理员权限")
+
+
+@app.get("/api/auth/users")
+async def users_list(request: Request):
+    _require_admin(request)
+    return {"users": auth.list_users(), "legacy_password": not auth.has_users()}
+
+
+@app.post("/api/auth/users")
+async def users_add(u: UserIn, request: Request):
+    _require_admin(request)
+    if len(u.username.strip()) < 2:
+        raise HTTPException(400, "用户名至少 2 位")
+    if len(u.password) < 4:
+        raise HTTPException(400, "口令至少 4 位")
+    try:
+        uid = auth.add_user(u.username.strip(), u.password, u.role)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    auth.bump_session_epoch()
+    await broadcast("settings", f"已添加用户 {u.username}（{u.role}）")
+    return {"ok": True, "id": uid}
+
+
+@app.post("/api/auth/users/{uid}/role")
+async def users_set_role(uid: int, r: RoleIn, request: Request):
+    _require_admin(request)
+    try:
+        auth.set_role(uid, r.role)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    await broadcast("settings", f"用户 #{uid} 角色已改为 {r.role}")
+    return {"ok": True}
+
+
+@app.delete("/api/auth/users/{uid}")
+async def users_del(uid: int, request: Request):
+    _require_admin(request)
+    n_admin = len([u for u in auth.list_users() if u["role"] == "admin"])
+    row = db.query_one("SELECT username, role FROM users WHERE id=?", (uid,))
+    if not row:
+        raise HTTPException(404, "用户不存在")
+    if row["role"] == "admin" and n_admin <= 1:
+        raise HTTPException(400, "至少保留一名管理员")
+    auth.del_user(uid)
+    await broadcast("settings", f"已删除用户 {row['username']}")
+    return {"ok": True}
+
+
+@app.post("/api/auth/self/password")
+async def self_change_password(p: ChangePwIn, request: Request):
+    """已登录用户改自己的口令（observer 也可用——中间件放行 /api/auth/self）。"""
+    if not auth.enabled():
+        raise HTTPException(400, "访问控制未开启")
+    username = request.headers.get("x-hw-user", "")
+    row = db.query_one("SELECT id FROM users WHERE username=?", (username,))
+    if not row or not auth.verify_login(username, p.old)[0]:
+        raise HTTPException(401, "旧口令错误")
+    if len(p.new) < 4:
+        raise HTTPException(400, "新口令至少 4 位")
+    auth.set_user_password(row["id"], p.new)
+    await broadcast("settings", f"用户 {username} 口令已修改")
+    return {"ok": True}
 
 
 @app.post("/api/auth/logout")

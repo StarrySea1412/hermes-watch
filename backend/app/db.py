@@ -95,11 +95,23 @@ MIGRATIONS = [
     "ALTER TABLE metrics ADD COLUMN temp_c REAL DEFAULT 0",
 ]
 
+SCHEMA_EXTRA = """
+CREATE TABLE IF NOT EXISTS users(
+  id INTEGER PRIMARY KEY,
+  username TEXT UNIQUE NOT NULL,
+  pw_hash TEXT NOT NULL,
+  salt TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'observer',
+  created_at REAL
+);
+"""
+
 
 def init_db():
     from . import secrets as sec
     with _lock, connect() as con:
         con.executescript(SCHEMA)
+        con.executescript(SCHEMA_EXTRA)
         for m in MIGRATIONS:
             try:
                 con.execute(m)

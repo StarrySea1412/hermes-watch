@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { api, fmtTime, subscribe, type Host } from '../api'
 import { PageHead } from '../ui'
 import { Ic } from '../icons'
+import { UserAdd } from './UserAdd'
 
 const THRESHOLD_FIELDS: { key: string; label: string; hint: string }[] = [
   { key: 'disk_warn', label: '磁盘警告 %', hint: '默认 85' },
@@ -51,6 +52,9 @@ export default function Settings() {
   const [csLoading, setCsLoading] = useState(false)
   const [csList, setCsList] = useState<any[]>([])
   const [csMsg, setCsMsg] = useState('')
+  const [authRole, setAuthRole] = useState('')
+  const [users, setUsers] = useState<any[]>([])
+  const [legacyPw, setLegacyPw] = useState(true)
   const notifyLabels = NOTIFY_LABELS
 
   const load = () => Promise.all([
@@ -70,6 +74,11 @@ export default function Settings() {
     api<any[]>('/notify/log?limit=8').then(setNotifyLog).catch(() => { /* 留痕失败不打断 */ }),
     api<{ enabled: boolean; token: string }>('/status/token')
       .then(r => setStatusTok(r.token || '')).catch(() => { /* noop */ }),
+    api<{ role: string }>('/auth/status').then(s => {
+      setAuthRole(s.role || '')
+      if (s.role === 'admin') api<{ users: any[]; legacy_password: boolean }>('/auth/users')
+        .then(r => { setUsers(r.users); setLegacyPw(r.legacy_password) }).catch(() => { /* noop */ })
+    }).catch(() => { /* noop */ }),
   ])
   useEffect(() => { load(); return subscribe(() => load()) }, [])
 
@@ -241,6 +250,51 @@ export default function Settings() {
             )}
             {authMsg && <div className="text-[12px] mt-2.5 text-[var(--text-mute)]">{authMsg}</div>}
           </div>
+
+          {/* 用户管理（admin）：多用户 + 角色分发 */}
+          {authOn && authRole === 'admin' && (
+            <div className="card p-5">
+              <div className="flex items-center gap-2.5 mb-1.5">
+                <h3 className="font-semibold text-[14.5px] text-[var(--text-hi)]">用户管理</h3>
+                <span className="pill" style={{ background: 'var(--accent-dim)', color: 'var(--accent)', fontSize: 10 }}>admin</span>
+              </div>
+              <p className="text-[12px] text-[var(--text-faint)] mb-3 leading-relaxed">
+                {legacyPw
+                  ? '当前仍是单口令模式：添加第一个用户后，面板口令登录自动停用，改为账号登录（现有口令保持可用直至删除该模式）。'
+                  : 'admin 可写（配置/审批/执行），observer 只读（看板/报告/终端，写操作被拒绝）。'}
+              </p>
+              <div className="space-y-1.5 mb-3">
+                {users.map(u => (
+                  <div key={u.id} className="flex items-center gap-2.5 text-[13px] inset px-3 py-2">
+                    <span className="font-semibold text-[var(--text-hi)]">{u.username}</span>
+                    <span className="pill text-[10px]" style={u.role === 'admin'
+                      ? { background: 'var(--accent-dim)', color: 'var(--accent)' }
+                      : { background: 'var(--neutral-bg)', color: 'var(--text-mute)' }}>{u.role}</span>
+                    <div className="ml-auto flex items-center gap-2.5">
+                      <button className="text-[11.5px] text-[var(--text-faint)] hover:text-[var(--accent)]"
+                        onClick={() => {
+                          const role = u.role === 'admin' ? 'observer' : 'admin'
+                          api(`/auth/users/${u.id}/role`, { method: 'POST', body: JSON.stringify({ role }) }).then(load)
+                        }}>改为 {u.role === 'admin' ? 'observer' : 'admin'}</button>
+                      <button className="text-[11.5px] text-[var(--text-faint)] hover:text-[var(--crit)]"
+                        onClick={() => confirm(`删除用户 ${u.username}？`) &&
+                          api(`/auth/users/${u.id}`, { method: 'DELETE' }).then(load).catch(e => alert(e.message))}>删除</button>
+                    </div>
+                  </div>
+                ))}
+                {!users.length && <div className="text-[11.5px] text-[var(--text-faint)]">还没有账号，添加第一个以启用多用户模式</div>}
+              </div>
+              <UserAdd onAdded={load} />
+            </div>
+          )}
+
+          {/* observer 只读提示 */}
+          {authOn && authRole === 'observer' && (
+            <div className="card p-4 mb-4 flex items-center gap-3" style={{ background: 'var(--warn-bg)', borderColor: 'var(--warn-border)' }}>
+              <span style={{ color: 'var(--warn)' }}><Ic name="search" size={16} /></span>
+              <span className="text-[12.5px] text-[var(--text)]">你以 <b>observer（只读）</b>身份登录——面板可看，配置/审批/执行等写操作已禁用。</span>
+            </div>
+          )}
 
           <div className="card p-5">
             <div className="flex items-start justify-between">

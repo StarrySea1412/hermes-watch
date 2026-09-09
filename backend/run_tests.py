@@ -369,6 +369,41 @@ def t_ack_and_silence():
     db.execute("DELETE FROM settings WHERE key IN ('notify_resend_min','webhook_url')")
 
 
+def t_rbac():
+    print("[rbac]")
+    # 多用户 CRUD + 角色校验
+    uid1 = auth.add_user("__t_admin__", "pw-admin-1", "admin")
+    uid2 = auth.add_user("__t_obs__", "pw-obs-1", "observer")
+    check("添加 admin/observer", auth.has_users())
+    users = {u["username"]: u["role"] for u in auth.list_users()}
+    check("用户清单角色正确", users.get("__t_admin__") == "admin" and users.get("__t_obs__") == "observer")
+    # 登录：正确/错误口令，observer 登录得 observer 角色
+    ok, role = auth.verify_login("__t_admin__", "pw-admin-1")
+    check("admin 登录", ok and role == "admin")
+    ok2, role2 = auth.verify_login("__t_obs__", "pw-obs-1")
+    check("observer 登录", ok2 and role2 == "observer")
+    ok3, _ = auth.verify_login("__t_obs__", "wrong")
+    check("错误口令拒绝", not ok3)
+    # 会话携带角色 + 防篡改
+    s_admin = auth.make_session("admin")
+    s_obs = auth.make_session("observer")
+    check("admin 会话 → admin", auth.session_role(s_admin) == "admin")
+    check("observer 会话 → observer", auth.session_role(s_obs) == "observer")
+    # observer 伪造 admin 角色串：签名不含 admin，校验失败
+    tampered = s_obs.replace(".observer.", ".admin.")
+    check("角色篡改拒绝", auth.session_role(tampered) == "")
+    # 角色变更 → 旧会话整体作废
+    auth.set_role(uid2, "admin")
+    check("角色变更后旧 observer 会话作废", auth.session_role(s_obs) == "")
+    ok4, role4 = auth.verify_login("__t_obs__", "pw-obs-1")
+    check("角色已更新为 admin", role4 == "admin")
+    auth.set_role(uid2, "observer")
+    # 最后管理员保护在端点层（main._require_admin + users_del），这里测删除行为
+    auth.del_user(uid1)
+    auth.del_user(uid2)
+    check("清理后无用户", not auth.has_users())
+
+
 if __name__ == "__main__":
     db.init_db()
     t_rules()
@@ -388,5 +423,6 @@ if __name__ == "__main__":
     t_notify_log()
     t_tofu()
     t_ack_and_silence()
+    t_rbac()
     print(f"\n{PASS} passed, {FAIL} failed")
     sys.exit(1 if FAIL else 0)
