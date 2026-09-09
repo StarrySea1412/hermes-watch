@@ -2,10 +2,27 @@ import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useTheme } from 'next-themes'
 import { subscribe } from './api'
+import { getLang, setLang, useT, type Lang } from './i18n'
 import { Ic, type IconName } from './icons'
 
 /* 图表组件（useEChart/HealthRing/Spark/LineChart）在 ./charts.tsx —— 独立模块
    让 echarts 只进异步 chunk，主包不背 1MB。页面从 '../charts' 导入。 */
+
+/* ============ 语言切换按钮（与主题切换同款交互） ============ */
+export function LangToggle() {
+  const { t } = useT()
+  const next = () => {
+    const cur = getLang()
+    setLang(cur === 'zh' ? 'en' : 'zh')
+  }
+  const lang: Lang = getLang()
+  return (
+    <button className="btn btn-ghost theme-toggle" onClick={next} title={t('lang.title')}
+      style={{ width: 38, padding: '7px 0', justifyContent: 'center', fontSize: 11, fontWeight: 700 }}>
+      {lang === 'zh' ? 'EN' : '中'}
+    </button>
+  )
+}
 
 /* ============ 主题切换按钮 ============ */
 export function ThemeToggle() {
@@ -30,19 +47,20 @@ export function ThemeToggle() {
 }
 
 /* ============ 布局 ============ */
-const NAV: { to: string; icon: IconName; label: string; end?: boolean }[] = [
-  { to: '/', icon: 'grid', label: 'Fleet 总览', end: true },
-  { to: '/topology', icon: 'radar', label: '拓扑视图' },
-  { to: '/diagnostics', icon: 'activity', label: '诊断中心' },
-  { to: '/terminal', icon: 'terminal', label: '远程终端' },
-  { to: '/chat', icon: 'sparkles', label: 'AI 对话' },
-  { to: '/timeline', icon: 'clock', label: '巡检时间线' },
-  { to: '/reports', icon: 'file', label: '报告中心' },
-  { to: '/enroll', icon: 'zap', label: '接入中心' },
-  { to: '/settings', icon: 'sliders', label: '设置' },
+const NAV: { to: string; icon: IconName; key: string; end?: boolean }[] = [
+  { to: '/', icon: 'grid', key: 'nav.fleet', end: true },
+  { to: '/topology', icon: 'radar', key: 'nav.topology' },
+  { to: '/diagnostics', icon: 'activity', key: 'nav.diagnostics' },
+  { to: '/terminal', icon: 'terminal', key: 'nav.terminal' },
+  { to: '/chat', icon: 'sparkles', key: 'nav.chat' },
+  { to: '/timeline', icon: 'clock', key: 'nav.timeline' },
+  { to: '/reports', icon: 'file', key: 'nav.reports' },
+  { to: '/enroll', icon: 'zap', key: 'nav.enroll' },
+  { to: '/settings', icon: 'sliders', key: 'nav.settings' },
 ]
 
 function SidebarInner({ onNavigate }: { onNavigate?: () => void }) {
+  const { t } = useT()
   return (
     <>
       <div className="px-2 pt-2 pb-5">
@@ -53,21 +71,21 @@ function SidebarInner({ onNavigate }: { onNavigate?: () => void }) {
           </div>
           <div className="min-w-0">
             <div className="font-bold text-[15px] text-[var(--text-hi)] tracking-wide">Hermes Watch</div>
-            <div className="text-[10.5px] text-[var(--text-faint)]">AI 服务器巡检 · 全本地</div>
+            <div className="text-[10.5px] text-[var(--text-faint)]">{t('app.tagline')}</div>
           </div>
         </div>
       </div>
       {NAV.map(n => (
         <NavLink key={n.to} to={n.to} end={n.end as any} onClick={onNavigate}
           className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-          <span className="nav-icon"><Ic name={n.icon} size={15.5} /></span>{n.label}
+          <span className="nav-icon"><Ic name={n.icon} size={15.5} /></span>{t(n.key)}
         </NavLink>
       ))}
       <div className="mt-auto px-2 pb-1 text-[10.5px] text-[var(--text-faint)] leading-relaxed">
         <div className="flex items-center gap-1.5 mb-1">
-          <span className="pulse-dot" style={{ background: 'var(--ok)' }} /> 巡检循环运行中
+          <span className="pulse-dot" style={{ background: 'var(--ok)' }} /> {t('app.loopRunning')}
         </div>
-        MVP 0.2 · 规则引擎先行<br />AI 深挖 · 只读提议制
+        MVP 0.3 · 规则引擎先行<br />AI 深挖 · 只读提议制
       </div>
     </>
   )
@@ -77,13 +95,15 @@ export function Layout() {
   const [flash, setFlash] = useState('')
   const [menuOpen, setMenuOpen] = useState(false)
   const { pathname } = useLocation()
+  const { t, lang } = useT()
 
-  // 浏览器标签页标题随路由同步
+  // 浏览器标签页标题随路由同步（语言切换时 useT 触发重渲染，一并刷新）
   useEffect(() => {
     const nav = NAV.find(n => n.to === pathname)
-    const name = nav?.label ?? (pathname.startsWith('/host/') ? '主机详情' : 'Hermes Watch')
+    const name = nav ? t(nav.key) : (pathname.startsWith('/host/') ? (lang === 'en' ? 'Host Detail' : '主机详情') : 'Hermes Watch')
     document.title = `${name} · Hermes Watch`
-  }, [pathname])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathname, lang])
 
   useEffect(() => {
     return subscribe(e => {
@@ -140,6 +160,7 @@ export function PageHead({ title, sub, children }: { title: string; sub?: string
         {sub && <p className="text-[12.5px] text-[var(--text-faint)] mt-1">{sub}</p>}
       </div>
       <div className="flex gap-2.5 items-center flex-wrap">
+        <LangToggle />
         <ThemeToggle />
         {children}
       </div>

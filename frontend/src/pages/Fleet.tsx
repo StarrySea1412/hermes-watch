@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, fmtTime, subscribe, type Event, type HostCard } from '../api'
 import { PageHead, Stat } from '../ui'
+import { useT } from '../i18n'
 import { Ic } from '../icons'
 import { HealthRing, Spark } from '../charts'
 import { alpha, useChartPalette } from '../theme'
@@ -11,6 +12,7 @@ const GROUP_ORDER = ['--accent', '--violet', '--ok', '--warn', '--crit', '--info
 
 export default function Fleet() {
   const P = useChartPalette()
+  const { t } = useT()
   const [hosts, setHosts] = useState<HostCard[]>([])
   const [events, setEvents] = useState<Event[]>([])
   const [loadErr, setLoadErr] = useState('')
@@ -54,9 +56,9 @@ export default function Fleet() {
 
   return (
     <div className="fade-in">
-      <PageHead title="Fleet 总览" sub={`${hosts.length} 台主机 · 自动巡检每 60 秒 · 数据全程本地`}>
+      <PageHead title={t('fleet.title')} sub={t('fleet.hosts', { n: hosts.length }) + ' · 60s · 100% local'}>
         <button className="btn btn-primary" onClick={() => api('/reports/generate', { method: 'POST' }).then(() => nav('/reports'))}>
-          生成健康报告
+          {t('btn.generate')}
         </button>
       </PageHead>
 
@@ -96,14 +98,14 @@ export default function Fleet() {
       )}
 
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
-        <Stat label="Fleet 整体健康分" value={avg} hint={`${critHosts} 台严重 · ${findings} 条待处理`} accent={avg >= 90 ? 'var(--ok)' : avg >= 70 ? 'var(--warn)' : 'var(--crit)'} />
-        <Stat label="健康主机" value={<span>{hosts.filter(h => h.status === 'ok').length}<span className="text-[14px] text-[var(--text-faint)]"> / {hosts.length}</span></span>} accent="var(--ok)" />
-        <Stat label="待处理发现" value={findings} accent={findings ? 'var(--warn)' : 'var(--text-mute)'} hint="点击主机卡片查看诊断" />
-        <Stat label="巡检状态" value={
+        <Stat label={t('fleet.avgScore')} value={avg} hint={`${critHosts} crit · ${findings} open`} accent={avg >= 90 ? 'var(--ok)' : avg >= 70 ? 'var(--warn)' : 'var(--crit)'} />
+        <Stat label={t('fleet.healthyHosts')} value={<span>{hosts.filter(h => h.status === 'ok').length}<span className="text-[14px] text-[var(--text-faint)]"> / {hosts.length}</span></span>} accent="var(--ok)" />
+        <Stat label={t('fleet.openFindings')} value={findings} accent={findings ? 'var(--warn)' : 'var(--text-mute)'} />
+        <Stat label={t('fleet.inspectStatus')} value={
           offlineHosts
-            ? <span className="flex items-center gap-2 text-[18px]"><span className="pulse-dot" style={{ background: 'var(--crit)' }} />{offlineHosts} 台离线</span>
-            : <span className="flex items-center gap-2 text-[18px]"><span className="pulse-dot" style={{ background: 'var(--ok)' }} />运行中</span>
-        } hint="60s 周期 · SSE 实时推送" />
+            ? <span className="flex items-center gap-2 text-[18px]"><span className="pulse-dot" style={{ background: 'var(--crit)' }} />{t('fleet.hostsOffline', { n: offlineHosts })}</span>
+            : <span className="flex items-center gap-2 text-[18px]"><span className="pulse-dot" style={{ background: 'var(--ok)' }} />{t('fleet.running')}</span>
+        } hint="60s · SSE" />
       </div>
 
       <div className="flex items-center gap-2 mb-4 flex-wrap">
@@ -150,9 +152,9 @@ export default function Fleet() {
                 </div>
                 <span className="pill" style={{ background: alpha(color, 0.09), color, border: `1px solid ${alpha(color, 0.2)}` }}>
                   {h.status === 'offline'
-                    ? <span className="flex items-center gap-1"><Ic name="wifi-off" size={11} /> 离线</span>
+                    ? <span className="flex items-center gap-1"><Ic name="wifi-off" size={11} /> {t('status.offline')}</span>
                     : <><span className="w-1.5 h-1.5 rounded-full" style={{ background: color }} />
-                      {h.status === 'ok' ? '健康' : h.status === 'warn' ? '警告' : '严重'}</>}
+                      {t(`status.${h.status}`)}</>}
                 </span>
               </div>
               <div className="flex items-center gap-3 mt-2">
