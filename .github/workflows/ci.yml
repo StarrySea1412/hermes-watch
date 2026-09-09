@@ -33,6 +33,9 @@ jobs:
       - name: 安装依赖
         working-directory: frontend
         run: npm ci
+      - name: 单元测试（vitest）
+        working-directory: frontend
+        run: npm test
       - name: 类型检查 + 构建
         working-directory: frontend
         run: |
