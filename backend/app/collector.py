@@ -18,6 +18,7 @@ except ImportError:  # pragma: no cover
 PROBE_SCRIPT = """
 echo "cpu=$(top -bn1 | grep 'Cpu(s)' | awk '{print $2+$4}' | cut -d. -f1)"
 echo "mem=$(free | awk '/Mem:/{printf("%.0f", $3/$2*100)}')"
+free | awk '/Swap:/{if($2>0) printf("swap=%.0f\\n", $3/$2*100)}'
 echo "load1=$(awk '{print $1}' /proc/loadavg)"
 df -P -x tmpfs -x devtmpfs | awk 'NR>1{u=$5; gsub(/%/,"",u); if(u>m)m=u} END{printf("disk=%.0f\\n", m)}'
 cat /proc/net/dev | awk -F'[: ]+' '/eth0|ens|enp/{rx+=$3; tx+=$11} END{printf("net_in=%.0f net_out=%.0f\\n", rx, tx)}'
@@ -215,16 +216,16 @@ async def collect(host: dict) -> tuple[dict, dict]:
         if not existing:
             rows = generate_mock(host)
             db.executemany(
-                "INSERT INTO metrics(host_id,ts,cpu,mem,disk,net_in,net_out,load1) "
-                "VALUES(:host_id,:ts,:cpu,:mem,:disk,:net_in,:net_out,:load1)", rows)
+                "INSERT INTO metrics(host_id,ts,cpu,mem,disk,net_in,net_out,load1,swap) "
+                "VALUES(:host_id,:ts,:cpu,:mem,:disk,:net_in,:net_out,:load1,0)", rows)
         else:
             # keep the series alive: one new 1-min point per collection cycle
             prev = dict(existing)
             if db.now() - prev["ts"] >= 55:
                 pt = next_mock_point(host, prev)
                 db.execute(
-                    "INSERT INTO metrics(host_id,ts,cpu,mem,disk,net_in,net_out,load1) "
-                    "VALUES(?,?,?,?,?,?,?,?)",
+                    "INSERT INTO metrics(host_id,ts,cpu,mem,disk,net_in,net_out,load1,swap) "
+                    "VALUES(?,?,?,?,?,?,?,?,0)",
                     (pt["host_id"], pt["ts"], pt["cpu"], pt["mem"], pt["disk"],
                      pt["net_in"], pt["net_out"], pt["load1"]))
         latest = db.query_one(
@@ -232,9 +233,9 @@ async def collect(host: dict) -> tuple[dict, dict]:
         return dict(latest) if latest else {}, mock_extras(host)
     base, extras = await probe_real(host)
     db.execute(
-        "INSERT INTO metrics(host_id,ts,cpu,mem,disk,net_in,net_out,load1) VALUES(?,?,?,?,?,?,?,?)",
+        "INSERT INTO metrics(host_id,ts,cpu,mem,disk,net_in,net_out,load1,swap) VALUES(?,?,?,?,?,?,?,?,?)",
         (host["id"], db.now(), base.get("cpu", 0), base.get("mem", 0), base.get("disk", 0),
-         base.get("net_in", 0), base.get("net_out", 0), base.get("load1", 0)))
+         base.get("net_in", 0), base.get("net_out", 0), base.get("load1", 0), base.get("swap", 0)))
     if extras:
         db.execute("UPDATE hosts SET last_extras=? WHERE id=?", (db.j(extras), host["id"]))
     return base, extras

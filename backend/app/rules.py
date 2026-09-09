@@ -14,6 +14,7 @@ DEFAULT_THRESHOLDS = {
     "cert_days": 14,
     "io_warn": 80_000,   # 磁盘持续写入 KiB/s（~80MB/s，接近 SATA/常见 SSD 顺序写上限）
     "temp_warn": 80,     # CPU/NVMe 温度 °C
+    "swap_warn": 70,     # swap 使用率 %（持续高 swap = 内存压力信号）
 }
 
 # 滞后恢复阈值（Netdata CLEAR 模式）：触发用 warn/crit 阈值，恢复要求指标回落到
@@ -97,6 +98,10 @@ def evaluate(host: dict, latest: dict | None, extras: dict) -> list[dict]:
         sev = "warn" if temp < T["temp_warn"] + 15 else "crit"
         add("temp", sev, f"温度过高 {temp:.0f}°C",
             f"传感器温度超过 {T['temp_warn']:.0f}°C", {"temp": temp})
+    swap = float(latest.get("swap") or 0)
+    if swap >= T["swap_warn"]:
+        add("swap", "warn", f"Swap 使用率 {swap:.0f}%",
+            f"swap 持续高位（>{T['swap_warn']:.0f}%）通常意味着物理内存不足", {"swap": swap})
 
     for svc in extras.get("failed_services", []):
         add("service", "crit", f"服务失败: {svc}", "systemd 检测到 failed unit", {"service": svc})

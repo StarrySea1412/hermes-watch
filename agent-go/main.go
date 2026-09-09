@@ -44,6 +44,7 @@ type Payload struct {
 	TS    int64   `json:"ts"`
 	CPU   float64 `json:"cpu"`
 	Mem   float64 `json:"mem"`
+	Swap  float64 `json:"swap"`  // swap 使用率 %（无 swap 时为 0）
 	Disk  float64 `json:"disk"`
 	Load1 float64 `json:"load1"`
 	NetIn float64 `json:"net_in"`
@@ -92,23 +93,31 @@ func readCPULoad() (cpu float64, load1 float64) {
 	return
 }
 
-func readMem() float64 {
+func readMem() (mem, swap float64) {
 	data, err := os.ReadFile("/proc/meminfo")
 	if err != nil {
-		return 0
+		return
 	}
-	var total, avail float64
+	var total, avail, swapTotal, swapFree float64
 	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(line, "MemTotal:") {
+		switch {
+		case strings.HasPrefix(line, "MemTotal:"):
 			fmt.Sscanf(line, "MemTotal: %f kB", &total)
-		} else if strings.HasPrefix(line, "MemAvailable:") {
+		case strings.HasPrefix(line, "MemAvailable:"):
 			fmt.Sscanf(line, "MemAvailable: %f kB", &avail)
+		case strings.HasPrefix(line, "SwapTotal:"):
+			fmt.Sscanf(line, "SwapTotal: %f kB", &swapTotal)
+		case strings.HasPrefix(line, "SwapFree:"):
+			fmt.Sscanf(line, "SwapFree: %f kB", &swapFree)
 		}
 	}
-	if total == 0 {
-		return 0
+	if total > 0 {
+		mem = (total - avail) / total * 100
 	}
-	return (total - avail) / total * 100
+	if swapTotal > 0 {
+		swap = (swapTotal - swapFree) / swapTotal * 100
+	}
+	return
 }
 
 func readDisk() float64 {
@@ -372,10 +381,12 @@ func sign(body []byte, ts int64) string {
 
 func collect() (Payload, string) {
 	cpu, load1 := readCPULoad()
+	mem, swap := readMem()
 	p := Payload{
 		TS:    time.Now().Unix(),
 		CPU:   round1(cpu),
-		Mem:   round1(readMem()),
+		Mem:   round1(mem),
+		Swap:  round1(swap),
 		Disk:  round1(readDisk()),
 		Load1: round2(load1),
 	}
@@ -438,7 +449,7 @@ func main() {
 		if err := push(p, body); err != nil {
 			fmt.Fprintf(os.Stderr, "[agent] push failed: %v (retry next cycle)\n", err)
 		} else {
-			fmt.Printf("[agent] pushed cpu=%.1f mem=%.1f disk=%.1f load=%.2f\n", p.CPU, p.Mem, p.Disk, p.Load1)
+			fmt.Printf("[agent] pushed cpu=%.1f mem=%.1f swap=%.1f disk=%.1f load=%.2f\n", p.CPU, p.Mem, p.Swap, p.Disk, p.Load1)
 		}
 		time.Sleep(interval)
 	}

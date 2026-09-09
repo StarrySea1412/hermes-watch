@@ -93,6 +93,8 @@ MIGRATIONS = [
     "ALTER TABLE metrics ADD COLUMN io_read REAL DEFAULT 0",
     "ALTER TABLE metrics ADD COLUMN io_write REAL DEFAULT 0",
     "ALTER TABLE metrics ADD COLUMN temp_c REAL DEFAULT 0",
+    # swap 使用率（%，agent/SSH 探针双来源），0=无 swap 或未上报
+    "ALTER TABLE metrics ADD COLUMN swap REAL DEFAULT 0",
 ]
 
 SCHEMA_EXTRA = """

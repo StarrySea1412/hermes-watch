@@ -80,7 +80,7 @@ def _mock_recover(host: dict, disk: float | None = None, mem: float | None = Non
         pt["mem"] = mem
         pt["cpu"] = min(pt["cpu"], 30.0)
     db.execute(
-        "INSERT INTO metrics(host_id,ts,cpu,mem,disk,net_in,net_out,load1) VALUES(?,?,?,?,?,?,?,?)",
+        "INSERT INTO metrics(host_id,ts,cpu,mem,disk,net_in,net_out,load1,swap) VALUES(?,?,?,?,?,?,?,?,0)",
         (host["id"], pt["ts"], pt["cpu"], pt["mem"], pt["disk"],
          pt["net_in"], pt["net_out"], pt["load1"]))
 

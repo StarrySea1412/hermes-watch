@@ -789,7 +789,7 @@ async def agent_push_body(request: Request):
     def _num(k: str) -> float:
         v = float(data.get(k, 0) or 0)
         return v if math.isfinite(v) else 0.0
-    m = {k: _num(k) for k in ("cpu", "mem", "disk", "load1", "net_in", "net_out")}
+    m = {k: _num(k) for k in ("cpu", "mem", "disk", "load1", "net_in", "net_out", "swap")}
     extras = data.get("extra") or {}
     # 磁盘 IO 速率与温度随 extras 上报，写入 metrics（图表/规则引擎用）；NaN/负值防御同上
     def _xnum(k: str) -> float:
@@ -801,10 +801,10 @@ async def agent_push_body(request: Request):
     io_read, io_write, temp = _xnum("disk_io_read"), _xnum("disk_io_write"), _xnum("temp_c")
     m.update(io_read=io_read, io_write=io_write, temp_c=temp)  # 规则引擎要看到 io/temp 字段
     db.execute(
-        "INSERT INTO metrics(host_id,ts,cpu,mem,disk,net_in,net_out,load1,io_read,io_write,temp_c) "
-        "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO metrics(host_id,ts,cpu,mem,disk,net_in,net_out,load1,io_read,io_write,temp_c,swap) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
         (h["id"], db.now(), m["cpu"], m["mem"], m["disk"], m["net_in"], m["net_out"], m["load1"],
-         io_read, io_write, temp))
+         io_read, io_write, temp, m["swap"]))
     db.execute("UPDATE hosts SET last_ok_ts=?, last_error='' WHERE id=?", (db.now(), h["id"]))
     if extras:
         db.execute("UPDATE hosts SET last_extras=? WHERE id=?", (db.j(extras), h["id"]))

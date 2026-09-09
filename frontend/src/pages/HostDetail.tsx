@@ -7,7 +7,7 @@ import { useChartPalette } from '../theme'
 
 type Detail = {
   host: { id: number; name: string; hostname: string; group: string; username: string; mock: boolean }
-  metrics: { ts: number; cpu: number; mem: number; disk: number; net_in: number; net_out: number; load1: number }[]
+  metrics: { ts: number; cpu: number; mem: number; disk: number; net_in: number; net_out: number; load1: number; swap?: number }[]
   findings: Finding[]
   extras: { top_proc: string; failed_services: string[]; logins: { user: string; tty: string; ip: string; when: string }[]; cert_days_left: number | null }
 }
@@ -102,6 +102,9 @@ export default function HostDetail() {
             <div className="text-[11.5px] text-[var(--text-faint)] mt-1.5 space-y-0.5">
               <div className="num">CPU {latest?.cpu.toFixed(0)}% · 内存 {latest?.mem.toFixed(0)}%</div>
               <div className="num">磁盘 {latest?.disk.toFixed(0)}% · 负载 {latest?.load1?.toFixed(2)}</div>
+              {!!latest?.swap && latest.swap > 0 && (
+                <div className="num">Swap {latest.swap.toFixed(0)}%</div>
+              )}
               <div className="num">网入 {fmtNet(latest?.net_in ?? 0)}</div>
             </div>
           </div>
