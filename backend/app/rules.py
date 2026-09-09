@@ -12,6 +12,8 @@ DEFAULT_THRESHOLDS = {
     "cpu_warn": 85,
     "load_warn": 8.0,
     "cert_days": 14,
+    "io_warn": 80_000,   # 磁盘持续写入 KiB/s（~80MB/s，接近 SATA/常见 SSD 顺序写上限）
+    "temp_warn": 80,     # CPU/NVMe 温度 °C
 }
 
 # 滞后恢复阈值（Netdata CLEAR 模式）：触发用 warn/crit 阈值，恢复要求指标回落到
@@ -85,6 +87,16 @@ def evaluate(host: dict, latest: dict | None, extras: dict) -> list[dict]:
         add("cpu", "warn", f"CPU 使用率 {cpu:.0f}%", "持续高负载", {"cpu": cpu})
     if load >= T["load_warn"] or ("load" in active and load >= C["load"]):
         add("load", "warn", f"系统负载 {load:.1f}", f"load1 超过 {T['load_warn']:.0f}", {"load1": load})
+
+    io_write = float(latest.get("io_write") or 0)
+    if io_write >= T["io_warn"]:
+        add("io", "warn", f"磁盘持续高写入 {io_write / 1024:.0f} MB/s",
+            f"写入速率超过 {T['io_warn'] / 1024:.0f} MB/s 警戒线（agent 上报）", {"io_write": io_write})
+    temp = float(latest.get("temp_c") or 0)
+    if temp >= T["temp_warn"]:
+        sev = "warn" if temp < T["temp_warn"] + 15 else "crit"
+        add("temp", sev, f"温度过高 {temp:.0f}°C",
+            f"传感器温度超过 {T['temp_warn']:.0f}°C", {"temp": temp})
 
     for svc in extras.get("failed_services", []):
         add("service", "crit", f"服务失败: {svc}", "systemd 检测到 failed unit", {"service": svc})

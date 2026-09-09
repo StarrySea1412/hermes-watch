@@ -89,6 +89,10 @@ MIGRATIONS = [
     # SSH TOFU：首次连接记录的主机公钥指纹（SHA256:…）；按主机静默截止时间
     "ALTER TABLE hosts ADD COLUMN host_key_fp TEXT DEFAULT ''",
     "ALTER TABLE hosts ADD COLUMN silenced_until REAL DEFAULT 0",
+    # agent 上报的磁盘 IO 速率（KiB/s）与温度（°C），0=未上报
+    "ALTER TABLE metrics ADD COLUMN io_read REAL DEFAULT 0",
+    "ALTER TABLE metrics ADD COLUMN io_write REAL DEFAULT 0",
+    "ALTER TABLE metrics ADD COLUMN temp_c REAL DEFAULT 0",
 ]
 
 

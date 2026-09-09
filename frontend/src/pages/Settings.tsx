@@ -11,6 +11,8 @@ const THRESHOLD_FIELDS: { key: string; label: string; hint: string }[] = [
   { key: 'cpu_warn', label: 'CPU 警告 %', hint: '默认 85' },
   { key: 'load_warn', label: 'load1 警告', hint: '默认 8.0' },
   { key: 'cert_days', label: '证书剩余天数', hint: '默认 14' },
+  { key: 'io_warn', label: '磁盘写入 KB/s', hint: '默认 80000' },
+  { key: 'temp_warn', label: '温度警告 °C', hint: '默认 80' },
 ]
 
 const THRESH_KEYS = THRESHOLD_FIELDS.map(f => f.key)

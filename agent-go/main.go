@@ -35,6 +35,9 @@ type Extra struct {
 	TopProc      string   `json:"top_proc,omitempty"`
 	FailedSvcs   []string `json:"failed_services,omitempty"`
 	CertDaysLeft *int     `json:"cert_days_left,omitempty"`
+	DiskIORead   float64  `json:"disk_io_read,omitempty"`  // KiB/s（采样窗口均值）
+	DiskIOWrite  float64  `json:"disk_io_write,omitempty"` // KiB/s
+	TempC        float64  `json:"temp_c,omitempty"`        // 主温度传感器 °C（无传感器时为 0 不上报）
 }
 
 type Payload struct {
@@ -249,6 +252,102 @@ func readCertDays() *int {
 	return &days
 }
 
+// diskIOStats 汇总 /proc/diskstats 的物理盘读写扇区数（排除 loop/ram/dm 等虚拟设备）。
+func diskIOStats() (readSec, writeSec float64) {
+	data, err := os.ReadFile("/proc/diskstats")
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 10 {
+			continue
+		}
+		dev := fields[2]
+		if strings.HasPrefix(dev, "loop") || strings.HasPrefix(dev, "ram") ||
+			strings.HasPrefix(dev, "dm-") || strings.HasPrefix(dev, "zram") ||
+			strings.HasPrefix(dev, "sr") || strings.HasPrefix(dev, "fd") {
+			continue
+		}
+		r, _ := strconv.ParseFloat(fields[5], 64)  // 读取扇区数
+		w, _ := strconv.ParseFloat(fields[9], 64)  // 写入扇区数
+		readSec += r
+		writeSec += w
+	}
+	return
+}
+
+// readDiskIO 两次采样求速率（KiB/s）。窗口 = HW_IO_WINDOW_MS（默认 500ms，够稳且几乎无开销）。
+func readDiskIO() (readKBs, writeKBs float64) {
+	r1, w1 := diskIOStats()
+	window := 500 * time.Millisecond
+	if n, err := strconv.Atoi(env("HW_IO_WINDOW_MS", "500")); err == nil && n >= 100 && n <= 5000 {
+		window = time.Duration(n) * time.Millisecond
+	}
+	time.Sleep(window)
+	r2, w2 := diskIOStats()
+	secs := window.Seconds()
+	if secs <= 0 {
+		return
+	}
+	// 扇区在 Linux 上恒为 512B；计数可能回绕/重置（重装盘），负值按 0 处理
+	readKBs = maxF(0, (r2-r1)*512/1024/secs)
+	writeKBs = maxF(0, (w2-w1)*512/1024/secs)
+	return
+}
+
+// readTemp 找 hwmon 里的主温度（优先 CPU/核心/Tdie/SOC，单位毫摄氏度）。
+func readTemp() float64 {
+	entries, _ := filepath.Glob("/sys/class/hwmon/hwmon*/temp*_input")
+	best, bestPrio := 0.0, 99
+	names := map[string]bool{}
+	for _, p := range entries {
+		labelFile := strings.TrimSuffix(p, "_input") + "_label"
+		label := ""
+		if b, err := os.ReadFile(labelFile); err == nil {
+			label = strings.ToLower(strings.TrimSpace(string(b)))
+		}
+		name := filepath.Base(filepath.Dir(filepath.Dir(p)))
+		key := name + ":" + label
+		if names[key] {
+			continue // 同一芯片同名传感器只看一次
+		}
+		names[key] = true
+		prio := 50
+		switch {
+		case strings.Contains(label, "cpu"), strings.Contains(label, "tdie"), strings.Contains(label, "tctl"):
+			prio = 0
+		case strings.Contains(label, "core"), strings.Contains(label, "soc"), strings.Contains(label, "package"):
+			prio = 10
+		case strings.Contains(label, "nvme"), strings.Contains(label, "composite"):
+			prio = 20
+		}
+		if prio > bestPrio {
+			continue
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		mill, _ := strconv.ParseFloat(strings.TrimSpace(string(b)), 64)
+		if mill <= 0 || mill > 150000 { // 0°C 或 >150°C 的读数不可信
+			continue
+		}
+		if prio < bestPrio || best == 0 {
+			bestPrio = prio
+			best = mill / 1000
+		}
+	}
+	return best
+}
+
+func maxF(a, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 // sh runs one of two whitelisted read-only commands (df / systemctl).
 func sh(cmd string) string {
 	parts := strings.Fields(cmd)
@@ -282,7 +381,15 @@ func collect() (Payload, string) {
 	}
 	p.NetIn, p.NetOut = readNet()
 	ex := &Extra{TopProc: readTopProcs(), FailedSvcs: readFailedServices(), CertDaysLeft: readCertDays()}
-	if ex.TopProc != "" || len(ex.FailedSvcs) > 0 || ex.CertDaysLeft != nil {
+	if readKBs, writeKBs := readDiskIO(); readKBs > 0 || writeKBs > 0 {
+		ex.DiskIORead = round1(readKBs)
+		ex.DiskIOWrite = round1(writeKBs)
+	}
+	if t := readTemp(); t > 0 {
+		ex.TempC = round1(t)
+	}
+	if ex.TopProc != "" || len(ex.FailedSvcs) > 0 || ex.CertDaysLeft != nil ||
+		ex.DiskIORead > 0 || ex.DiskIOWrite > 0 || ex.TempC > 0 {
 		p.Extra = ex
 	}
 	body, _ := json.Marshal(p)

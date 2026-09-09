@@ -12,7 +12,7 @@ type Detail = {
   extras: { top_proc: string; failed_services: string[]; logins: { user: string; tty: string; ip: string; when: string }[]; cert_days_left: number | null }
 }
 
-const TABS = ['进程', '服务与登录', '证书'] as const
+  const TABS = ['进程', '服务与登录', '证书', 'IO 与温度'] as const
 
 export default function HostDetail() {
   const { id } = useParams()
@@ -73,6 +73,9 @@ export default function HostDetail() {
   const logins = Array.isArray(ex.logins) ? ex.logins : []
   const failedServices = Array.isArray(ex.failed_services) ? ex.failed_services : []
   const certDays = typeof ex.cert_days_left === 'number' ? ex.cert_days_left : null
+  const ioRead = typeof (ex as any).disk_io_read === 'number' ? (ex as any).disk_io_read : 0
+  const ioWrite = typeof (ex as any).disk_io_write === 'number' ? (ex as any).disk_io_write : 0
+  const tempC = typeof (ex as any).temp_c === 'number' ? (ex as any).temp_c : 0
   const latest = d.metrics.at(-1)
   const score = 100 - d.findings.reduce((s, f) => s + (f.severity === 'crit' ? 25 : 8), 0)
   const chartData = d.metrics.map(m => [m.ts * 1000, m.cpu, m.mem, m.disk])
@@ -202,6 +205,23 @@ export default function HostDetail() {
               {certDays ?? '—'} 天
             </span>
             <div className="text-[11px] text-[var(--text-faint)] mt-1.5">检测 /etc/letsencrypt 下的证书，14 天内到期将产生警告发现</div>
+          </div>
+        )}
+        {tab === 'IO 与温度' && (
+          <div className="text-[13px] space-y-2.5">
+            <div>磁盘 IO（agent 采样窗口均值）：
+              读 <b className="num ml-1">{(ioRead / 1024).toFixed(2)} MB/s</b>
+              <span className="text-[var(--text-faint)] mx-2">·</span>
+              写 <b className="num ml-1" style={{ color: ioWrite >= 80 * 1024 ? 'var(--warn)' : 'inherit' }}>
+                {(ioWrite / 1024).toFixed(2)} MB/s</b>
+              {ioRead === 0 && ioWrite === 0 && <span className="text-[var(--text-faint)] ml-2">（无上报数据——出站 agent 主机才采集）</span>}
+            </div>
+            <div>温度：
+              {tempC > 0
+                ? <b className="num ml-1" style={{ color: tempC >= 80 ? 'var(--crit)' : tempC >= 70 ? 'var(--warn)' : 'var(--ok)' }}>{tempC.toFixed(1)}°C</b>
+                : <span className="text-[var(--text-faint)] ml-1">未检测到温度传感器</span>}
+            </div>
+            <div className="text-[11px] text-[var(--text-faint)]">写入持续超 80 MB/s 或温度超 80°C 时规则引擎产生发现；阈值可在设置页调整</div>
           </div>
         )}
         </div>
