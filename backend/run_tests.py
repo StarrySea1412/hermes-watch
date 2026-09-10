@@ -148,6 +148,12 @@ def t_secrets():
 def t_analysis_card():
     print("[analysis-card]")
     h = db.query_one("SELECT * FROM hosts LIMIT 1")
+    tmp_hid = None
+    if not h:  # 全新库（CI/空数据目录）没有演示主机：临时补一颗 mock 主机（不碰 SSH），结束清理
+        tmp_hid = db.execute(
+            "INSERT INTO hosts(name,hostname,group_name,mock,created_at) VALUES('__t_diag__','x','t',1,?)",
+            (db.now(),))
+        h = db.query_one("SELECT * FROM hosts WHERE id=?", (tmp_hid,))
     fid = db.execute(
         "INSERT INTO findings(host_id,ts,type,severity,title,detail,evidence) VALUES(?,?,?,?,?,?,?)",
         (h["id"], db.now(), "cpu", "warn", "【测试】CPU 90%", "test", "{}"))
@@ -160,6 +166,8 @@ def t_analysis_card():
     db.execute("DELETE FROM findings WHERE id=?", (fid,))
     if card["proposal_id"]:
         db.execute("DELETE FROM proposals WHERE id=?", (card["proposal_id"],))
+    if tmp_hid is not None:
+        db.execute("DELETE FROM hosts WHERE id=?", (tmp_hid,))
 
 
 def t_session_epoch():

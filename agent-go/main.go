@@ -3,11 +3,14 @@
 // + extras to the panel every interval. Read-only on the host.
 //
 // Build (from this directory):
-//   GOOS=linux   GOARCH=amd64 go build -ldflags "-s -w" -o hermes-watch-agent-linux-amd64
-//   GOOS=windows GOARCH=amd64 go build -ldflags "-s -w" -o hermes-watch-agent.exe
+//
+//	GOOS=linux   GOARCH=amd64 go build -ldflags "-s -w" -o hermes-watch-agent-linux-amd64
+//	GOOS=windows GOARCH=amd64 go build -ldflags "-s -w" -o hermes-watch-agent.exe
 //
 // Run on the monitored host:
-//   HW_URL=http://panel:8800 HW_TOKEN=hw_xxx ./hermes-watch-agent
+//
+//	HW_URL=http://panel:8800 HW_TOKEN=hw_xxx ./hermes-watch-agent
+//
 // HW_TOKEN — per-host token from the panel's enrollment page; it doubles as
 // the HMAC-SHA256 key that signs every push (replay-protected by timestamp).
 package main
@@ -41,10 +44,10 @@ type Extra struct {
 	TopProc      string       `json:"top_proc,omitempty"`
 	FailedSvcs   []string     `json:"failed_services,omitempty"`
 	CertDaysLeft *int         `json:"cert_days_left,omitempty"`
-	DiskIORead   float64      `json:"disk_io_read,omitempty"`  // KiB/s（采样窗口均值）
-	DiskIOWrite  float64      `json:"disk_io_write,omitempty"` // KiB/s
-	TempC        float64      `json:"temp_c,omitempty"`        // 主温度传感器 °C（无传感器时为 0 不上报）
-	Ports        []PortListen `json:"ports,omitempty"`         // LISTEN 端口清点（业务暴露面侦查）
+	DiskIORead   float64      `json:"disk_io_read,omitempty"`      // KiB/s（采样窗口均值）
+	DiskIOWrite  float64      `json:"disk_io_write,omitempty"`     // KiB/s
+	TempC        float64      `json:"temp_c,omitempty"`            // 主温度传感器 °C（无传感器时为 0 不上报）
+	Ports        []PortListen `json:"ports,omitempty"`             // LISTEN 端口清点（业务暴露面侦查）
 	Containers   []Container  `json:"docker_containers,omitempty"` // docker ps -a 清单（非 running 触发发现）
 }
 
@@ -56,15 +59,15 @@ type Container struct {
 }
 
 type Payload struct {
-	TS    int64   `json:"ts"`
-	CPU   float64 `json:"cpu"`
-	Mem   float64 `json:"mem"`
-	Swap  float64 `json:"swap"`  // swap 使用率 %（无 swap 时为 0）
-	Disk  float64 `json:"disk"`
-	Load1 float64 `json:"load1"`
-	NetIn float64 `json:"net_in"`
+	TS     int64   `json:"ts"`
+	CPU    float64 `json:"cpu"`
+	Mem    float64 `json:"mem"`
+	Swap   float64 `json:"swap"` // swap 使用率 %（无 swap 时为 0）
+	Disk   float64 `json:"disk"`
+	Load1  float64 `json:"load1"`
+	NetIn  float64 `json:"net_in"`
 	NetOut float64 `json:"net_out"`
-	Extra *Extra  `json:"extra,omitempty"`
+	Extra  *Extra  `json:"extra,omitempty"`
 }
 
 var (
@@ -314,8 +317,8 @@ func diskIOStats() (readSec, writeSec float64) {
 			strings.HasPrefix(dev, "sr") || strings.HasPrefix(dev, "fd") {
 			continue
 		}
-		r, _ := strconv.ParseFloat(fields[5], 64)  // 读取扇区数
-		w, _ := strconv.ParseFloat(fields[9], 64)  // 写入扇区数
+		r, _ := strconv.ParseFloat(fields[5], 64) // 读取扇区数
+		w, _ := strconv.ParseFloat(fields[9], 64) // 写入扇区数
 		readSec += r
 		writeSec += w
 	}
@@ -404,8 +407,7 @@ func readPorts() []PortListen {
 	var entries []listenEntry
 
 	parse := func(data string, v6 bool) {
-		for _, line := range strings.Split(data, "
-") {
+		for _, line := range strings.Split(data, "\n") {
 			fields := strings.Fields(line)
 			if len(fields) < 10 || fields[3] != "0A" { // st=0A → LISTEN
 				continue
@@ -444,10 +446,10 @@ func readPorts() []PortListen {
 		}
 	}
 	if d, err := os.ReadFile("/proc/net/tcp"); err == nil {
-		parse(d, false)
+		parse(string(d), false)
 	}
 	if d, err := os.ReadFile("/proc/net/tcp6"); err == nil {
-		parse(d, true)
+		parse(string(d), true)
 	}
 	if len(entries) == 0 {
 		return nil
@@ -455,7 +457,8 @@ func readPorts() []PortListen {
 
 	// socket inode → 进程名（/proc/<pid>/fd/* 链接反查；无权限的进程留空）
 	inodeProc := map[string]string{}
-	for _, fd := range filepath.Glob("/proc/[0-9]*/fd/*") {
+	matches, _ := filepath.Glob("/proc/[0-9]*/fd/*")
+	for _, fd := range matches {
 		link, err := os.Readlink(fd)
 		if err != nil || !strings.HasPrefix(link, "socket:[") {
 			continue
