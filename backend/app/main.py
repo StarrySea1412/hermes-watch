@@ -397,6 +397,10 @@ class ProbeIn(BaseModel):
     fail_threshold: int = probes.DEFAULT_FAIL_THRESHOLD
     success_threshold: int = probes.DEFAULT_SUCCESS_THRESHOLD
     timeout_s: int = 10
+    keyword: str = ""          # URL 条件:响应体须包含
+    max_latency_ms: int = 0    # URL 条件:响应时间上限 ms（0=不查）
+    cert_days_min: int = 0     # URL 条件:HTTPS 证书最低剩余天数（0=不查）
+    interval_s: int = 0        # 每目标独立周期（0=用全局 probe_interval）
 
 
 @app.get("/api/probes")
@@ -418,11 +422,18 @@ async def probe_add(p: ProbeIn):
         raise HTTPException(400, i18n.t("TCP 拨测目标格式为 主机:端口", "TCP probe target must be host:port"))
     if db.query_one("SELECT id FROM probes WHERE name=?", (name,)):
         raise HTTPException(400, i18n.t(f"同名拨测已存在: {name}", f"A probe named {name} already exists"))
+    if kind == "tcp" and (p.keyword or p.max_latency_ms or p.cert_days_min):
+        raise HTTPException(400, i18n.t("条件引擎仅适用于 URL 拨测",
+                                        "Conditions apply to URL probes only"))
+    if p.interval_s and p.interval_s < 15:
+        raise HTTPException(400, i18n.t("独立周期不能低于 15 秒", "Per-probe interval must be ≥ 15s"))
     pid = db.execute(
         "INSERT INTO probes(name,kind,target,fail_threshold,success_threshold,timeout_s,"
-        "up,fail_streak,succ_streak,created_at) VALUES(?,?,?,?,?,?,1,0,0,?)",
+        "keyword,max_latency_ms,cert_days_min,interval_s,up,fail_streak,succ_streak,created_at) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (name, kind, target, max(1, p.fail_threshold), max(1, p.success_threshold),
-         max(1, p.timeout_s), db.now()))
+         max(1, p.timeout_s), (p.keyword or "").strip()[:200], max(0, p.max_latency_ms),
+         max(0, p.cert_days_min), max(0, p.interval_s), 1, 0, 0, db.now()))
     await broadcast("probe", i18n.t(f"新增拨测: {name} → {target}", f"Probe added: {name} → {target}"),
                     {"probe_id": pid})
     return {"id": pid}

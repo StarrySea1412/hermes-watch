@@ -26,6 +26,17 @@ const THRESH_KEYS = THRESHOLD_FIELDS.map(f => f.key)
 const NOTIFY_LABELS: Record<string, string> = {
   wecom: 'st.notify.chWecom', dingtalk: 'st.notify.chDingtalk', feishu: 'st.notify.chFeishu',
   telegram: 'st.notify.chTelegram', serverchan: 'st.notify.chServerchan', webhook: 'st.notify.chWebhook',
+  discord: 'st.notify.chDiscord', slack: 'st.notify.chSlack', ntfy: 'st.notify.chNtfy', smtp: 'st.notify.chSmtp',
+}
+
+// Webhook 输入框的 label / placeholder 随所选渠道切换；未列出的渠道走通用 Webhook 兜底
+const NOTIFY_URL_FIELD: Record<string, { label: string; ph: string }> = {
+  telegram: { label: 'st.notify.botToken', ph: '123456:ABC-DEF…' },
+  serverchan: { label: 'st.notify.sendKey', ph: 'SCT…' },
+  discord: { label: 'st.notify.webhookUrl', ph: 'https://discord.com/api/webhooks/…' },
+  slack: { label: 'st.notify.webhookUrl', ph: 'https://hooks.slack.com/services/…' },
+  ntfy: { label: 'st.notify.topicUrl', ph: 'https://ntfy.sh/my-topic' },
+  smtp: { label: 'st.notify.smtpUrl', ph: 'smtp://user:pass@smtp.gmail.com:587?to=me@example.com' },
 }
 
 // ---------- 设置页分区导航 ----------
@@ -71,6 +82,7 @@ export default function Settings() {
   const [users, setUsers] = useState<any[]>([])
   const [legacyPw, setLegacyPw] = useState(true)
   const notifyLabels = NOTIFY_LABELS
+  const urlField = NOTIFY_URL_FIELD[notifyChannel] ?? { label: 'st.notify.webhookUrl', ph: 'https://…webhook/send?key=…' }
   const sections = SECTIONS(t)
 
   const load = () => Promise.all([
@@ -394,14 +406,15 @@ export default function Settings() {
               </select>
             </div>
             <div>
-              <div className="text-[11px] text-[var(--text-faint)] mb-1.5">
-                {notifyChannel === 'telegram' ? 'Bot Token' : notifyChannel === 'serverchan' ? 'SendKey' : t('st.notify.webhookUrl')}
-              </div>
+              <div className="text-[11px] text-[var(--text-faint)] mb-1.5">{t(urlField.label)}</div>
               <input className="input mono" value={notifyUrl}
-                placeholder={notifyChannel === 'telegram' ? '123456:ABC-DEF…' : notifyChannel === 'serverchan' ? 'SCT…' : 'https://…webhook/send?key=…'}
+                placeholder={urlField.ph}
                 onChange={e => setNotifyUrl(e.target.value)}
                 onBlur={() => saveSetting('webhook_url', notifyUrl)} />
             </div>
+            {notifyChannel === 'smtp' && (
+              <div className="sm:col-span-2 text-[11px] text-[var(--text-faint)] leading-relaxed">{t('st.notify.smtpHint')}</div>
+            )}
             {notifyChannel === 'telegram' && (
               <div className="sm:col-span-2">
                 <div className="text-[11px] text-[var(--text-faint)] mb-1.5">{t('st.notify.chatId')}</div>

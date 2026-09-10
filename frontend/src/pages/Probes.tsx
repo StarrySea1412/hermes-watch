@@ -12,6 +12,7 @@ type Probe = {
   id: number; name: string; kind: 'url' | 'tcp'; target: string
   up: 0 | 1; fail_streak: number; succ_streak: number
   fail_threshold: number; success_threshold: number; timeout_s: number
+  keyword: string; max_latency_ms: number; cert_days_min: number; interval_s: number
   last_ts: number | null; last_latency: number | null; last_error: string | null
   last_flip_ts: number | null; created_at: number | null
 }
@@ -35,6 +36,17 @@ function ProbeCard({ p, logs, running, onRun, onAskDelete }: {
     (l.latency != null ? ` · ${Math.round(l.latency)}ms` : '') +
     (l.error ? ` · ${l.error}` : '')
 
+  // 条件徽标（参考 kind 徽标的 pill 样式，用中性色调避免抢过类型徽标）：
+  // URL 条件三件套（关键词 / 延迟上限 / 证书天数）+ 每目标独立周期（仅 >0 时标，0=用全局不标）
+  const isUrl = p.kind === 'url'
+  const kw = (p.keyword || '').trim()
+  const conds: { key: string; text: string; title?: string }[] = []
+  if (isUrl && kw) conds.push({ key: 'kw', text: t('pr.badgeKeyword', { n: kw.length > 18 ? kw.slice(0, 18) + '…' : kw }), title: kw })
+  if (isUrl && (p.max_latency_ms || 0) > 0) conds.push({ key: 'ms', text: t('pr.badgeLatency', { n: p.max_latency_ms }) })
+  if (isUrl && (p.cert_days_min || 0) > 0) conds.push({ key: 'cert', text: t('pr.badgeCert', { n: p.cert_days_min }) })
+  if ((p.interval_s || 0) > 0) conds.push({ key: 'iv', text: t('pr.badgeInterval', { n: p.interval_s }) })
+  const watching = ok ? p.fail_streak > 0 : p.succ_streak > 0
+
   return (
     <div className="card card-hover p-4 flex flex-col h-full">
       <div className="flex items-start justify-between gap-2">
@@ -53,12 +65,20 @@ function ProbeCard({ p, logs, running, onRun, onAskDelete }: {
         </span>
       </div>
 
-      {/* 防抖窗口徽标：up 中在攒失败 / down 中在攒成功 */}
-      {(ok ? p.fail_streak > 0 : p.succ_streak > 0) && (
-        <div className="mt-2">
-          <span className="pill" style={{ fontSize: 10.5, background: ok ? 'var(--warn-bg)' : 'var(--ok-bg)', color: ok ? 'var(--warn)' : 'var(--ok)', border: `1px solid ${ok ? 'var(--warn-border)' : 'var(--ok-border)'}` }}>
-            {ok ? t('pr.watch', { n: p.fail_streak, m: p.fail_threshold }) : t('pr.recover', { n: p.succ_streak, m: p.success_threshold })}
-          </span>
+      {/* 条件徽标 + 防抖窗口徽标（up 中在攒失败 / down 中在攒成功）同排展示 */}
+      {(conds.length > 0 || watching) && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {conds.map(b => (
+            <span key={b.key} className="pill" title={b.title}
+              style={{ fontSize: 10, padding: '1px 7px', background: 'var(--neutral-bg)', color: 'var(--text-mute)' }}>
+              {b.text}
+            </span>
+          ))}
+          {watching && (
+            <span className="pill" style={{ fontSize: 10.5, background: ok ? 'var(--warn-bg)' : 'var(--ok-bg)', color: ok ? 'var(--warn)' : 'var(--ok)', border: `1px solid ${ok ? 'var(--warn-border)' : 'var(--ok-border)'}` }}>
+              {ok ? t('pr.watch', { n: p.fail_streak, m: p.fail_threshold }) : t('pr.recover', { n: p.succ_streak, m: p.success_threshold })}
+            </span>
+          )}
         </div>
       )}
 
@@ -117,7 +137,10 @@ export default function Probes() {
   const [msg, setMsg] = useState('')
   const [form, setForm] = useState({ name: '', kind: 'url' as 'url' | 'tcp', target: '' })
   const [advOpen, setAdvOpen] = useState(false)
-  const [adv, setAdv] = useState({ fail_threshold: '3', success_threshold: '2', timeout_s: '10' })
+  const [adv, setAdv] = useState({
+    fail_threshold: '3', success_threshold: '2', timeout_s: '10',
+    keyword: '', max_latency_ms: '', cert_days_min: '', interval_s: '',
+  })
   const [adding, setAdding] = useState(false)
   const [runningId, setRunningId] = useState<number | null>(null)
   const [delTarget, setDelTarget] = useState<Probe | null>(null)
@@ -176,6 +199,11 @@ export default function Probes() {
     if (adv.fail_threshold !== '') payload.fail_threshold = Number(adv.fail_threshold)
     if (adv.success_threshold !== '') payload.success_threshold = Number(adv.success_threshold)
     if (adv.timeout_s !== '') payload.timeout_s = Number(adv.timeout_s)
+    // URL 条件三件套仅随 url 拨测提交（后端对 TCP 拒收）；独立周期两类通用，0=用全局
+    if (form.kind === 'url' && adv.keyword.trim()) payload.keyword = adv.keyword.trim()
+    if (form.kind === 'url' && adv.max_latency_ms !== '') payload.max_latency_ms = Number(adv.max_latency_ms)
+    if (form.kind === 'url' && adv.cert_days_min !== '') payload.cert_days_min = Number(adv.cert_days_min)
+    if (adv.interval_s !== '') payload.interval_s = Number(adv.interval_s)
     api<{ id: number }>('/probes', { method: 'POST', body: JSON.stringify(payload) })
       .then(() => {
         flash(t('pr.added', { n: form.name }))
@@ -310,6 +338,41 @@ export default function Probes() {
                   </div>
                   <input className="input num" inputMode="numeric" placeholder="10" value={adv.timeout_s}
                     onChange={e => setAdv({ ...adv, timeout_s: e.target.value })} />
+                </div>
+              </div>
+              {/* 条件引擎输入：URL 条件三件套（TCP 选中时置灰禁用，后端对 TCP 拒收）+ 两类通用的独立周期；留空 = 不启用 */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 pt-2.5">
+                <div style={form.kind === 'tcp' ? { opacity: 0.45 } : undefined}
+                  title={form.kind === 'tcp' ? t('pr.condUrlOnly') : undefined}>
+                  <div className="text-[11px] text-[var(--text-faint)] mb-1">{t('pr.condKeyword')}</div>
+                  <input className="input" placeholder={t('pr.condKeywordPh')} value={adv.keyword}
+                    disabled={form.kind === 'tcp'}
+                    onChange={e => setAdv({ ...adv, keyword: e.target.value })} />
+                </div>
+                <div style={form.kind === 'tcp' ? { opacity: 0.45 } : undefined}
+                  title={form.kind === 'tcp' ? t('pr.condUrlOnly') : undefined}>
+                  <div className="flex justify-between text-[11px] text-[var(--text-faint)] mb-1">
+                    <span>{t('pr.condLatency')}</span><span>{t('pr.condOff')}</span>
+                  </div>
+                  <input className="input num" inputMode="numeric" placeholder="0" value={adv.max_latency_ms}
+                    disabled={form.kind === 'tcp'}
+                    onChange={e => setAdv({ ...adv, max_latency_ms: e.target.value })} />
+                </div>
+                <div style={form.kind === 'tcp' ? { opacity: 0.45 } : undefined}
+                  title={form.kind === 'tcp' ? t('pr.condUrlOnly') : undefined}>
+                  <div className="flex justify-between text-[11px] text-[var(--text-faint)] mb-1">
+                    <span>{t('pr.condCert')}</span><span>{t('pr.condOff')}</span>
+                  </div>
+                  <input className="input num" inputMode="numeric" placeholder="0" value={adv.cert_days_min}
+                    disabled={form.kind === 'tcp'}
+                    onChange={e => setAdv({ ...adv, cert_days_min: e.target.value })} />
+                </div>
+                <div>
+                  <div className="flex justify-between text-[11px] text-[var(--text-faint)] mb-1">
+                    <span>{t('pr.condInterval')}</span><span>{t('pr.condGlobal')}</span>
+                  </div>
+                  <input className="input num" inputMode="numeric" placeholder="0" value={adv.interval_s}
+                    onChange={e => setAdv({ ...adv, interval_s: e.target.value })} />
                 </div>
               </div>
               <div className="text-[11px] text-[var(--text-faint)] mt-2">{t('pr.advHint', { n: Number(adv.fail_threshold) || 3, m: Number(adv.success_threshold) || 2 })}</div>

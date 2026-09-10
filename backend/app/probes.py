@@ -42,8 +42,53 @@ def _setting_int(key: str, default: int, minimum: int = 5) -> int:
 
 # ---------------------------------------------------------------- 拨测执行
 
+def url_check(p: dict, status: int, body: str, latency_ms: float,
+              cert_days: int | None) -> tuple[bool, str]:
+    """URL 拨测条件引擎（Gatus 式条件的轻量子集），纯函数便于测试。
+
+    依次判定：状态码 → 关键词包含 → 证书剩余天数 → 响应时间上限。
+    返回 (ok, error)；error 为首个未满足条件的原因（存 last_error 并进事件）。"""
+    if status >= 400:
+        return False, f"HTTP {status}"
+    kw = (p.get("keyword") or "").strip()
+    if kw and kw not in (body or ""):
+        return False, f"keyword missing: {kw[:80]}"
+    min_days = int(p.get("cert_days_min") or 0)
+    if min_days > 0:
+        if cert_days is None:
+            return False, "cert: could not read peer certificate"
+        if cert_days < min_days:
+            return False, f"cert expires in {cert_days}d (< {min_days}d)"
+    max_ms = int(p.get("max_latency_ms") or 0)
+    if max_ms > 0 and latency_ms > max_ms:
+        return False, f"latency {round(latency_ms)}ms > {max_ms}ms"
+    return True, ""
+
+
+async def cert_days_left(host: str, port: int, timeout_s: float) -> int | None:
+    """TLS 握手取对端证书剩余天数；任何异常返回 None（调用方按条件判定失败）。"""
+    import ssl
+    try:
+        ctx = ssl.create_default_context()
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port, ssl=ctx, server_hostname=host), timeout_s)
+        cert = writer.get_extra_info("peercert")
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except Exception:
+            pass
+        if not cert or "notAfter" not in cert:
+            return None
+        return max(0, int((ssl.cert_time_to_seconds(cert["notAfter"]) - time.time()) // 86400))
+    except Exception:
+        return None
+
+
 async def run_probe(p: dict) -> tuple[bool, float | None, str]:
-    """执行一次拨测 → (ok, latency_ms, error)。任何异常都归一为失败，不外抛。"""
+    """执行一次拨测 → (ok, latency_ms, error)。任何异常都归一为失败，不外抛。
+
+    URL 拨测带条件引擎（url_check）：状态码 / 关键词 / 证书天数 / 响应时间。"""
     target = (p["target"] or "").strip()
     timeout_s = max(1.0, float(p["timeout_s"] or 10))
     started = time.perf_counter()
@@ -61,14 +106,18 @@ async def run_probe(p: dict) -> tuple[bool, float | None, str]:
             except Exception:
                 pass
             return True, latency, ""
-        # URL（默认）：GET 一次，<400 视为成功（与 UK/拨测惯例一致）；自签证书常年在拨测目标里
+        # URL（默认）：GET 一次 + 条件引擎；自签证书常年在拨测目标里（verify=False）
         async with httpx.AsyncClient(timeout=timeout_s, follow_redirects=True,
                                      verify=False) as cli:
             r = await cli.get(target)
             latency = (time.perf_counter() - started) * 1000
-            if r.status_code < 400:
-                return True, latency, ""
-            return False, latency, f"HTTP {r.status_code}"
+        cert_days = None
+        if target.startswith("https://") and int(p.get("cert_days_min") or 0) > 0:
+            from urllib.parse import urlsplit
+            sp = urlsplit(target)
+            cert_days = await cert_days_left(sp.hostname, sp.port or 443, timeout_s)
+        ok, err = url_check(p, r.status_code, r.text, latency, cert_days)
+        return ok, latency, err
     except Exception as e:
         return False, None, f"{type(e).__name__}: {e}"[:160]
 
@@ -152,10 +201,11 @@ def _fmt_dur(sec: float) -> str:
 # ---------------------------------------------------------------- 调度
 
 async def run_due() -> int:
-    """跑一轮所有到期拨测（每条按全局 probe_interval 周期），返回执行的条数。"""
-    interval = _setting_int("probe_interval", 30, minimum=15)
+    """跑一轮所有到期拨测；每条可用 interval_s 覆盖全局 probe_interval（0=用全局）。"""
+    global_interval = _setting_int("probe_interval", 30, minimum=15)
     n = 0
     for p in db.query("SELECT * FROM probes"):
+        interval = max(15, int(p["interval_s"] or 0)) or global_interval
         if (p["last_ts"] or 0) + interval > db.now() + 0.5:
             continue
         ok, latency, error = await run_probe(p)

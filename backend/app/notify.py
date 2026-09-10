@@ -1,8 +1,13 @@
-"""多渠道告警通知：企业微信 / 钉钉 / 飞书 / Telegram / Server酱 / 通用 Webhook。
+"""多渠道告警通知：企业微信 / 钉钉 / 飞书 / Telegram / Server酱 / 通用 Webhook /
+Discord / Slack / ntfy / SMTP 邮件。
 
 配置全部存 settings 表（webhook_url / notify_channel / telegram_chat_id /
 quiet_hours）。免打扰时段（quiet_hours，如 "23:00-08:00"）内只记事件不发外呼。
 发送失败静默返回错误串，由调用方决定是否留痕，绝不阻塞巡检主流程。
+
+SMTP 用 Shoutrrr 式单字段打包进 webhook_url（与拨测 URL 同一输入框，UI 不加字段）：
+    smtp://user:pass@smtp.gmail.com:587?to=me@example.com&from=alert@example.com
+    端口 465 走 SMTP_SSL，其余端口 STARTTLS。
 """
 import datetime
 import httpx
@@ -16,6 +21,10 @@ LABELS = {
     "telegram": "Telegram",
     "serverchan": "Server酱",
     "webhook": "通用 Webhook",
+    "discord": "Discord",
+    "slack": "Slack",
+    "ntfy": "ntfy",
+    "smtp": "Email (SMTP)",
 }
 
 
@@ -63,6 +72,13 @@ async def send(kind: str, text: str) -> tuple[bool, str]:
     tag = f"[Hermes Watch] {kind}"
     ch, url = c["channel"], c["url"]
     try:
+        if ch == "smtp":
+            err = await _smtp_send(url, tag, text)
+            if err:
+                _log(kind, text, ch, False, err)
+                return False, err
+            _log(kind, text, ch, True, "")
+            return True, ""
         async with httpx.AsyncClient(timeout=8) as cli:
             if ch == "feishu":
                 r = await cli.post(url, json={"msg_type": "text", "content": {"text": f"{tag}: {text}"}})
@@ -74,6 +90,16 @@ async def send(kind: str, text: str) -> tuple[bool, str]:
                                    data={"title": tag, "desp": text})
             elif ch == "webhook":  # 通用：扁平 JSON，方便自建中转
                 r = await cli.post(url, json={"source": "hermes-watch", "kind": kind, "text": text})
+            elif ch == "discord":
+                r = await cli.post(url, json={"content": f"**{tag}**\n{text}"})
+            elif ch == "slack":
+                r = await cli.post(url, json={"text": f"*{tag}*\n{text}"})
+            elif ch == "ntfy":     # url = 完整主题 URL（如 https://ntfy.sh/my-topic）
+                # httpx 头仅 latin-1 可编码：Title 中文时省略（正文 UTF-8 不受影响）
+                headers = {"Priority": "high"}
+                if tag.isascii():
+                    headers["Title"] = tag
+                r = await cli.post(url, content=text.encode("utf-8"), headers=headers)
             else:  # wecom / dingtalk 文本消息同构
                 r = await cli.post(url, json={"msgtype": "text", "text": {"content": f"{tag}: {text}"}})
         if r.status_code >= 400:
@@ -85,6 +111,69 @@ async def send(kind: str, text: str) -> tuple[bool, str]:
         err = f"{type(e).__name__}: {e}"[:200]
         _log(kind, text, ch, False, err)
         return False, err
+
+
+def parse_smtp_url(url: str) -> dict:
+    """smtp://user:pass@host:port?to=a@b.c&from=x@y.z → 配置 dict（纯函数，可测）。"""
+    from urllib.parse import urlsplit, parse_qs
+    sp = urlsplit(url.strip())
+    if sp.scheme != "smtp" or not sp.hostname:
+        raise ValueError("expected smtp://user:pass@host:port?to=...")
+    q = parse_qs(sp.query)
+    to = (q.get("to") or [""])[0]
+    if not to:
+        raise ValueError("missing ?to= recipient")
+    return {
+        "host": sp.hostname,
+        "port": sp.port or 587,
+        "user": sp.username or "",
+        "password": sp.password or "",
+        "to": to,
+        "from": (q.get("from") or [sp.username or "hermes-watch@localhost"])[0],
+    }
+
+
+async def _smtp_send(url: str, tag: str, text: str) -> str:
+    """SMTP 发送（线程池里跑同步 smtplib）；返回错误说明，空串=成功。"""
+    import asyncio as _asyncio
+    return await _asyncio.to_thread(_smtp_send_sync, url, tag, text)
+
+
+def _smtp_send_sync(url: str, tag: str, text: str) -> str:
+    import smtplib
+    from email.message import EmailMessage
+    try:
+        cfg = parse_smtp_url(url)
+    except ValueError as e:
+        return str(e)[:160]
+    msg = EmailMessage()
+    msg["Subject"] = tag
+    msg["From"] = cfg["from"]
+    msg["To"] = cfg["to"]
+    msg.set_content(text)
+    try:
+        if cfg["port"] == 465:
+            with smtplib.SMTP_SSL(cfg["host"], cfg["port"], timeout=10) as s:
+                _smtp_login(s, cfg)
+                s.send_message(msg)
+        else:
+            with smtplib.SMTP(cfg["host"], cfg["port"], timeout=10) as s:
+                s.ehlo()
+                try:
+                    s.starttls()
+                    s.ehlo()
+                except smtplib.SMTPNotSupportedError:
+                    pass  # 内网中继可能明文
+                _smtp_login(s, cfg)
+                s.send_message(msg)
+        return ""
+    except Exception as e:
+        return f"{type(e).__name__}: {e}"[:200]
+
+
+def _smtp_login(s, cfg: dict) -> None:
+    if cfg["user"] and cfg["password"]:
+        s.login(cfg["user"], cfg["password"])
 
 
 def _log(kind: str, text: str, channel: str, ok: bool, error: str) -> None:

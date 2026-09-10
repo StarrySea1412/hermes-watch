@@ -355,6 +355,39 @@ def t_probes():
     ok3, latency3, err3 = asyncio.run(_tcp_ok())
     check("TCP 连通判成功", ok3 and latency3 and latency3 > 0, err3)
 
+    # ---- 条件引擎（url_check 纯函数）----
+    p_url = {"keyword": "OK", "max_latency_ms": 300, "cert_days_min": 14}
+    c_ok, c_err = probes.url_check(p_url, 200, "body OK here", 120.0, 30)
+    check("条件全过", c_ok and c_err == "")
+    c2, e2 = probes.url_check(p_url, 200, "no marker here", 120.0, 30)
+    check("关键词缺失判失败", not c2 and "keyword missing" in e2)
+    c3, e3 = probes.url_check(p_url, 200, "OK", 500.0, 30)
+    check("响应超上限判失败", not c3 and "latency" in e3 and "500ms" in e3)
+    c4, e4 = probes.url_check(p_url, 200, "OK", 120.0, 7)
+    check("证书剩余不足判失败", not c4 and "7d" in e4 and "(< 14d)" in e4)
+    c5, e5 = probes.url_check(p_url, 200, "OK", 120.0, None)
+    check("证书读取失败判失败", not c5 and "could not read peer certificate" in e5)
+    c6, _ = probes.url_check({"keyword": "", "max_latency_ms": 0, "cert_days_min": 0}, 500, "", 9000.0, None)
+    check("无条件时仅看状态码", not c6)
+    c7, _ = probes.url_check({"keyword": "OK"}, 200, "OK", 9000.0, None)
+    check("条件缺省不拖累成功", c7)
+
+    # SMTP URL 解析（Shoutrrr 式单字段）
+    cfg = notify.parse_smtp_url("smtp://alert-bot:pw123@smtp.example.com:465?to=me@x.com&from=s@x.com")
+    check("SMTP URL 解析", cfg["host"] == "smtp.example.com" and cfg["port"] == 465
+          and cfg["user"] == "alert-bot" and cfg["password"] == "pw123"
+          and cfg["to"] == "me@x.com" and cfg["from"] == "s@x.com")
+    cfg2 = notify.parse_smtp_url("smtp://u@smtp.x.com?to=a@b.c")
+    check("SMTP URL 缺省端口/发件人", cfg2["port"] == 587 and cfg2["from"] == "u" and cfg2["password"] == "")
+    try:
+        notify.parse_smtp_url("http://wrong")
+        check("SMTP 非法 scheme 拒绝", False)
+    except ValueError:
+        check("SMTP 非法 scheme 拒绝", True)
+
+    # 新通知渠道登记完整性（LABELS 是渠道白名单,conf 校验用）
+    check("新渠道已登记", all(k in notify.LABELS for k in ("discord", "slack", "ntfy", "smtp")))
+
     # 状态机：up 中 2 次失败不打翻（防抖），第 3 次才 down
     r1 = probes.evaluate(p, False)
     p = db.query_one("SELECT * FROM probes WHERE id=?", (pid,))

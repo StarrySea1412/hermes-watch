@@ -65,12 +65,12 @@ npm run dev                          # http://localhost:5273
 
 - **出站 Agent（推荐）**：接入中心页生成 Token → 目标机运行 [Go 单二进制](agent-go/README.md)（HMAC 签名防重放，上报进程/失败服务/证书），或下载 `hermes-watch-agent.sh`（sh + curl，纯只读）。机器在内网/防火墙后无需开入站端口，指标每 60s 主动推送
 - **SSH 拉取**：设置页填 `名称/IP/用户/密码`，巡检走 SSH 只读探测（top/free/df/ps/systemctl/last/openssl）
-- **服务拨测**：拨测页添加 URL（`https://…/health`）或 TCP（`host:port`）目标，30s 周期自动拨测；双阈值防抖（默认连续 3 次失败下线 / 2 次成功恢复），下线/恢复事件进时间线并外发通知，48 桶心跳条带图看历史
+- **服务拨测**：拨测页添加 URL（`https://…/health`）或 TCP（`host:port`）目标，周期自动拨测（全局 30s，可每目标独立）；Gatus 式条件引擎：状态码 + **关键词包含** + **响应时间上限** + **HTTPS 证书剩余天数**，双阈值防抖（默认连续 3 次失败下线 / 2 次成功恢复），下线/恢复事件进时间线并外发通知，48 桶心跳条带图看历史
 - **Docker 演示 fleet**：`cp .env.example .env` 填入公钥 → `docker compose up -d`（2221-2223 端口）
 - **故障注入**：`./chaos.sh disk demo-db-1` 观察告警→诊断→提案全链路
 - **WSL 当服务器（已实战验证）**：`sudo apt install openssh-server && systemctl enable --now ssh`，把 WSL IP（`hostname -I`）添加进面板。密码留空 = 自动使用本机 `~/.ssh/id_ed25519` 密钥免密登录（公钥需在目标机 `authorized_keys` 中）。注意：WSL2 空闲约 60s 会回收整个 VM，sshd 随之消失——保持 WSL 终端开着，或在 `%UserProfile%\.wslconfig` 配 `[wsl2] vmIdleTimeout=-1`
 - **接入任意 LLM**：MCP 客户端（Claude Desktop / Cursor）配置 `http://127.0.0.1:8800/api/mcp`，5 个只读工具直查巡检数据；LLM 调用链路详解见 [`docs/LLM.md`](docs/LLM.md)
-- **告警通知**：设置 → 通知渠道，支持企业微信 / 钉钉 / 飞书 / Telegram / Server酱 / 通用 Webhook；crit 告警推送、恢复通知（带持续时长）、持续告警周期重发、免打扰时段，发送前可一键测试
+- **告警通知**：设置 → 通知渠道，10 渠道：企业微信 / 钉钉 / 飞书 / Telegram / Server酱 / 通用 Webhook / Discord / Slack / ntfy / SMTP 邮件（Shoutrrr 式单字段配置）；crit 告警推送、恢复通知（带持续时长）、持续告警周期重发、免打扰时段，发送前可一键测试
 - **本地试 AI 叙事（无需真实 LLM）**：`py backend/mock_llm.py`（内置本地 mock 端点 :18777）→ 设置页 Base URL 填 `http://127.0.0.1:18777/v1`，开启 AI 外发后重新诊断即可看到「AI 叙事」区块
 
 ## 设计铁律（来自竞品调研，见 `docs/`）
@@ -92,8 +92,8 @@ npm run dev                          # http://localhost:5273
 - [x] 面板访问控制（可选口令门：PBKDF2 口令存储 + HMAC 签名 Cookie 会话 + 登录限速；出站 Agent 与本地 MCP 各走通道不受影响；设置页可开关/改口令，默认关闭）
 - [x] 出站 Agent 单二进制（Go，纯 stdlib）：HMAC-SHA256 签名 + 时间戳防重放，新增进程/失败服务/证书上报，extras 入库并驱动规则引擎；保留 sh+curl 轻量版
 - [x] 工程化：路由懒加载 + echarts/xterm 独立分包（主包 1.4MB → 242KB）、指标默认保留 7 天（可配）、`py backend/run_tests.py` 69 项回归全绿
-- [x] 告警生命周期层（对标 Uptime Kuma / Gatus / Netdata，见 `docs/竞品调研.md`）：告警自动恢复 + 恢复通知带持续时长、阈值滞后双阈值防抖、crit 持续告警周期重发、免打扰时段（跨午夜）、主机离线检测与可视化、6 渠道通知（企业微信/钉钉/飞书/Telegram/Server酱/通用 Webhook，设置页可测活 + 发送留痕）
+- [x] 告警生命周期层（对标 Uptime Kuma / Gatus / Netdata，见 `docs/竞品调研.md`）：告警自动恢复 + 恢复通知带持续时长、阈值滞后双阈值防抖、crit 持续告警周期重发、免打扰时段（跨午夜）、主机离线检测与可视化、10 渠道通知（企业微信/钉钉/飞书/Telegram/Server酱/通用 Webhook/Discord/Slack/ntfy/SMTP，设置页可测活 + 发送留痕）
 - [x] AI 对话流式输出（SSE 逐 token，LLM 关闭自动降级本地规则引擎摘要）+ LLM 出站脱敏（k8sgpt 式 anonymize：主机名/IP/用户名出站前替换占位符，映射不落盘，回答映射回真实名）
 - [x] 巡检心跳条带图（主机详情 48 桶上下状态带）+ PWA 可安装（manifest + service worker，仅生产注册）+ 公开状态页（设置页一键生成带 token 只读分享链接，60s 自动刷新，不含地址/凭据/证据，可随时撤销）+ i18n 全量双语（自建零依赖翻译层，PageHead 一键切 EN/中文；前端全部 UI 文案 + 后端发现/事件/诊断卡/通知留痕/公开状态页均跟随面板语言，历史中文行读出口正则兜底翻译）
 - [x] 多用户与 RBAC（admin/observer 角色：users 表 + 角色签名会话 + observer 只读拦截；存量单口令兼容自动 admin）
-- [x] 服务拨测（对标 Uptime Kuma 拨测 / Gatus 状态机）：URL / TCP 目标独立 30s 周期拨测，Gatus 式双阈值防抖（连续失败下线 / 连续成功恢复，阈值可配），48 桶心跳条带图 + 延迟显示，翻转才落事件并外发通知（复用免打扰/留痕），手动「立即拨测」，心跳随指标保留期清理
+- [x] 服务拨测（对标 Uptime Kuma 拨测 / Gatus 状态机）：URL / TCP 目标拨测（全局/每目标独立周期），Gatus 式条件引擎（状态码 + 关键词包含 + 响应时间上限 + HTTPS 证书剩余天数）与双阈值防抖（连续失败下线 / 连续成功恢复，阈值可配），48 桶心跳条带图 + 延迟显示，翻转才落事件并外发通知（复用免打扰/留痕），手动「立即拨测」，心跳随指标保留期清理

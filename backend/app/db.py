@@ -71,6 +71,10 @@ CREATE TABLE IF NOT EXISTS probes(
   fail_threshold INTEGER DEFAULT 3,   -- 连续 N 次失败 → down（Gatus failure-threshold）
   success_threshold INTEGER DEFAULT 2,-- down 中连续 N 次成功 → up（Gatus success-threshold）
   timeout_s INTEGER DEFAULT 10,
+  keyword TEXT DEFAULT '',            -- URL 条件:响应体须包含（空=不查）
+  max_latency_ms INTEGER DEFAULT 0,   -- URL 条件:响应时间上限 ms（0=不查）
+  cert_days_min INTEGER DEFAULT 0,    -- URL 条件:HTTPS 证书最低剩余天数（0=不查）
+  interval_s INTEGER DEFAULT 0,       -- 每目标独立周期（0=用全局 probe_interval）
   last_ts REAL, last_latency REAL, last_error TEXT DEFAULT '',
   last_flip_ts REAL, created_at REAL
 );
@@ -91,6 +95,11 @@ def connect() -> sqlite3.Connection:
 
 
 MIGRATIONS = [
+    # 拨测条件引擎（Gatus 式）：关键词包含 / 响应时间上限 / 证书最低剩余天数 / 每目标独立周期
+    "ALTER TABLE probes ADD COLUMN keyword TEXT DEFAULT ''",
+    "ALTER TABLE probes ADD COLUMN max_latency_ms INTEGER DEFAULT 0",
+    "ALTER TABLE probes ADD COLUMN cert_days_min INTEGER DEFAULT 0",
+    "ALTER TABLE probes ADD COLUMN interval_s INTEGER DEFAULT 0",
     # 出站采集 Agent（beszel 式）：token 绑定主机，agent 主动 push 指标
     "ALTER TABLE hosts ADD COLUMN agent_token TEXT DEFAULT ''",
     # Go agent 上报的 extras（进程/失败服务/证书），host_detail 直接展示
