@@ -73,13 +73,15 @@
   --topo-glow: rgba(34, 211, 238, 0.06);
 
   /* 液态玻璃层：半透明面板 + 折射模糊 + 顶缘高光 + 感光眩光 */
-  --glass-bg: rgba(16, 24, 40, 0.55);
-  --glass-strong: rgba(13, 20, 36, 0.86);
-  --glass-blur: 18px;
-  --glass-saturate: 160%;
-  --glass-hi: rgba(255, 255, 255, 0.09);
-  --glass-edge: rgba(255, 255, 255, 0.035);
-  --glass-glare: rgba(190, 227, 248, 0.09);
+  --glass-bg: rgba(15, 23, 42, 0.42);
+  --glass-strong: rgba(10, 16, 30, 0.78);
+  --glass-blur: 26px;
+  --glass-saturate: 180%;
+  --glass-bright: 1.08;
+  --glass-hi: rgba(255, 255, 255, 0.16);
+  --glass-edge: rgba(255, 255, 255, 0.05);
+  --glass-ring: rgba(255, 255, 255, 0.07);
+  --glass-glare: rgba(170, 220, 255, 0.16);
 
   color-scheme: dark;
 }
@@ -144,13 +146,15 @@ html.light {
   --topo-glow: rgba(8, 145, 178, 0.05);
 
   /* 液态玻璃层（白昼灯塔：白玻璃 + 更亮高光） */
-  --glass-bg: rgba(255, 255, 255, 0.55);
-  --glass-strong: rgba(255, 255, 255, 0.88);
-  --glass-blur: 18px;
-  --glass-saturate: 140%;
-  --glass-hi: rgba(255, 255, 255, 0.9);
-  --glass-edge: rgba(15, 23, 42, 0.04);
-  --glass-glare: rgba(255, 255, 255, 0.5);
+  --glass-bg: rgba(255, 255, 255, 0.48);
+  --glass-strong: rgba(255, 255, 255, 0.85);
+  --glass-blur: 26px;
+  --glass-saturate: 160%;
+  --glass-bright: 1.02;
+  --glass-hi: rgba(255, 255, 255, 0.95);
+  --glass-edge: rgba(15, 23, 42, 0.05);
+  --glass-ring: rgba(255, 255, 255, 0.55);
+  --glass-glare: rgba(255, 255, 255, 0.65);
 
   color-scheme: light;
 }
@@ -172,7 +176,8 @@ body {
   -webkit-font-smoothing: antialiased;
   transition: color .25s ease;
 }
-/* 液态环境光：两团缓慢漂移的色斑（纯 transform 动画，GPU 合成不重排） */
+/* 液态环境光：三团彩色光斑缓慢漂移（纯 transform 动画，GPU 合成不重排）——
+   玻璃质感九成靠背后有东西可折射，光斑必须够浓才看得出 blur */
 body::before {
   content: '';
   position: fixed;
@@ -180,26 +185,29 @@ body::before {
   z-index: -1;
   pointer-events: none;
   background:
-    radial-gradient(42% 38% at 26% 30%, var(--blob-1, transparent), transparent 70%),
-    radial-gradient(38% 34% at 76% 72%, var(--blob-2, transparent), transparent 70%);
+    radial-gradient(42% 38% at 24% 26%, var(--blob-1, transparent), transparent 70%),
+    radial-gradient(38% 34% at 78% 62%, var(--blob-2, transparent), transparent 70%),
+    radial-gradient(32% 28% at 52% 106%, var(--blob-3, transparent), transparent 70%);
   animation: blob-drift 52s ease-in-out infinite alternate;
 }
 @keyframes blob-drift {
   0%   { transform: translate3d(0, 0, 0) scale(1); }
-  50%  { transform: translate3d(3%, -2%, 0) rotate(4deg) scale(1.07); }
-  100% { transform: translate3d(-2.5%, 2.5%, 0) rotate(-4deg) scale(1.04); }
+  50%  { transform: translate3d(4%, -2.5%, 0) rotate(5deg) scale(1.1); }
+  100% { transform: translate3d(-3%, 3%, 0) rotate(-5deg) scale(1.05); }
 }
 html.dark {
-  --glow-1: rgba(34, 211, 238, 0.05);
-  --glow-2: rgba(167, 139, 250, 0.045);
-  --blob-1: rgba(34, 211, 238, 0.08);
-  --blob-2: rgba(167, 139, 250, 0.07);
+  --glow-1: rgba(34, 211, 238, 0.07);
+  --glow-2: rgba(167, 139, 250, 0.06);
+  --blob-1: rgba(34, 211, 238, 0.22);
+  --blob-2: rgba(139, 92, 246, 0.19);
+  --blob-3: rgba(244, 114, 182, 0.12);
 }
 html.light {
-  --glow-1: rgba(8, 145, 178, 0.05);
-  --glow-2: rgba(124, 58, 237, 0.035);
-  --blob-1: rgba(8, 145, 178, 0.09);
-  --blob-2: rgba(124, 58, 237, 0.07);
+  --glow-1: rgba(6, 182, 212, 0.08);
+  --glow-2: rgba(124, 58, 237, 0.06);
+  --blob-1: rgba(6, 182, 212, 0.17);
+  --blob-2: rgba(139, 92, 246, 0.14);
+  --blob-3: rgba(244, 114, 182, 0.11);
 }
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -224,37 +232,39 @@ html.light {
    + 顶部镜面渐变 + 半透明玻璃底；backdrop 实时折射下层漂移光斑 */
 .card {
   background:
-    radial-gradient(280px at var(--mx, 50%) var(--my, -40%), var(--glass-glare), transparent 70%),
+    radial-gradient(340px at var(--mx, 50%) var(--my, -40%), var(--glass-glare), transparent 70%),
     linear-gradient(180deg, var(--card-sheen-from), var(--card-sheen-to)),
     var(--glass-bg);
   border: 1px solid var(--border);
   border-radius: 14px;
-  box-shadow: inset 0 1px 0 var(--glass-hi), inset 0 -1px 0 var(--glass-edge), var(--card-shadow);
+  box-shadow: inset 0 1px 0 var(--glass-hi), inset 0 -1px 0 var(--glass-edge),
+              0 0 0 1px var(--glass-ring), var(--card-shadow);
   transition: border-color .18s ease, transform .18s ease, box-shadow .18s ease;
 }
 html.dark {
-  --card-sheen-from: rgba(255,255,255,0.045);
+  --card-sheen-from: rgba(255,255,255,0.07);
   --card-sheen-to: rgba(255,255,255,0);
-  --card-shadow: 0 10px 30px -14px rgba(0,0,0,0.55), 0 1px 2px rgba(0,0,0,0.4);
+  --card-shadow: 0 14px 40px -16px rgba(0,0,0,0.6), 0 1px 2px rgba(0,0,0,0.4);
 }
 html.light {
-  --card-sheen-from: rgba(255,255,255,0.55);
+  --card-sheen-from: rgba(255,255,255,0.6);
   --card-sheen-to: rgba(255,255,255,0);
-  --card-shadow: 0 10px 28px -16px rgba(15,23,42,0.18), 0 1px 2px rgba(15,23,42,0.06);
+  --card-shadow: 0 14px 36px -18px rgba(15,23,42,0.2), 0 1px 2px rgba(15,23,42,0.06);
 }
 .card-hover:hover {
   border-color: var(--border-strong);
   transform: translateY(-1px);
   box-shadow: inset 0 1px 0 var(--glass-hi), inset 0 -1px 0 var(--glass-edge),
-              var(--card-shadow-hover, 0 8px 22px -8px rgba(0,0,0,0.6));
+              0 0 0 1px var(--glass-ring),
+              var(--card-shadow-hover, 0 12px 32px -10px rgba(0,0,0,0.65));
 }
-html.light { --card-shadow-hover: 0 10px 26px -10px rgba(15, 23, 42, 0.2); }
+html.light { --card-shadow-hover: 0 14px 34px -12px rgba(15, 23, 42, 0.22); }
 /* 顶栏/侧栏玻璃面（移动端抽屉用 strong：盖在内容上需要更高不透明度） */
 .glass-bar, .glass-bar-strong { background: var(--glass-bg); }
-.glass-bar-strong { --glass-blur: 28px; background: var(--glass-strong); }
+.glass-bar-strong { --glass-blur: 32px; background: var(--glass-strong); }
 /* backdrop-filter 标准与 -webkit 前缀分两条规则声明（选择器不同防止构建器合并重写） */
-.card, .glass-bar, .glass-bar-strong { -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate)); }
-html .card, html .glass-bar, html .glass-bar-strong { backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate)); }
+.card, .glass-bar, .glass-bar-strong { -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate)) brightness(var(--glass-bright)); }
+html .card, html .glass-bar, html .glass-bar-strong { backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate)) brightness(var(--glass-bright)); }
 .inset {
   background: var(--bg-inset);
   border: 1px solid var(--border);
