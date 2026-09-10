@@ -2,6 +2,8 @@
 backend/.secret_key
 backend/*.db
 backend/*.db-*
+backend/backups/
+backend/.restore-pending
 .env
 venv/
 __pycache__/

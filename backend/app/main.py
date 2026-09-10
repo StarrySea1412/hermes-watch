@@ -13,13 +13,17 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
-from . import agent, analysis, auth, ccswitch, db, executor, i18n, mcp_server, notify, ports, probes, reports, rules, scheduler, seed, secrets, terminal
+from . import agent, analysis, auth, backups, ccswitch, db, executor, i18n, mcp_server, notify, ports, probes, reports, rules, scheduler, seed, secrets, terminal
 
 # 前端经 vite 代理（生产同源部署）访问 /api，浏览器永远同源 —— 不开 CORS 面
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    # 恢复标记消费必须先于 init_db：用户点了「恢复此备份」后，重启即还原库文件
+    restored = backups.consume_restore_if_pending()
+    if restored:
+        print(f"[backup] database restored from {restored}", flush=True)
     db.init_db()
     scheduler.set_broadcaster(broadcast)
     probes.set_broadcaster(broadcast)
@@ -465,6 +469,46 @@ async def probe_run_now(pid: int):
 @app.get("/api/probes/{pid}/log")
 def probe_log(pid: int, limit: int = 120):
     return db.query("SELECT * FROM probe_log WHERE probe_id=? ORDER BY ts DESC LIMIT ?", (pid, limit))
+
+
+# ---------- 备份与恢复（SQLite 单文件是部署优点，这里把它做成运维能力） ----------
+
+@app.get("/api/backups")
+def backups_list(request: Request):
+    _require_admin(request)
+    return backups.list_backups()
+
+
+@app.post("/api/backups")
+async def backups_create(request: Request):
+    _require_admin(request)
+    info = backups.create_backup()
+    backups.prune()
+    await broadcast("settings", i18n.t(f"已创建数据库备份: {info['name']}",
+                                       f"Database backup created: {info['name']}"))
+    return info
+
+
+@app.delete("/api/backups/{name}")
+async def backups_delete(name: str, request: Request):
+    _require_admin(request)
+    p = backups.resolve_name(name)
+    if not p:
+        raise HTTPException(404, i18n.t("备份不存在", "Backup not found"))
+    p.unlink()
+    return {"deleted": name}
+
+
+@app.post("/api/backups/{name}/restore")
+async def backups_restore(name: str, request: Request):
+    """暂存恢复标记；重启后面板自动还原到该备份（运行中换库文件不安全）。"""
+    _require_admin(request)
+    if not backups.stage_restore(name):
+        raise HTTPException(404, i18n.t("备份不存在", "Backup not found"))
+    msg = i18n.t(f"已选择恢复到 {name}，重启面板后生效",
+                 f"Restore to {name} staged; takes effect on next panel restart")
+    await broadcast("settings", msg)
+    return {"staged": True, "message": msg}
 
 
 # ---------- AI chat ----------
@@ -1051,7 +1095,8 @@ def run():
     import uvicorn
     # 生产容器内监听 0.0.0.0（HW_LISTEN 覆盖时生效）；本机默认仍只听 127.0.0.1
     host = os.environ.get("HW_LISTEN", "127.0.0.1")
-    uvicorn.run(app, host=host, port=8800, log_level="warning")
+    port = int(os.environ.get("HW_PORT") or 8800)
+    uvicorn.run(app, host=host, port=port, log_level="warning")
 
 
 # ---------- 生产模式：单进程托管前端构建产物（frontend dist 同仓部署）----------

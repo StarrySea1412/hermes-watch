@@ -316,6 +316,56 @@ def t_notify_log():
     check("未配置渠道 ok=0 error=未配置", row["ok"] == 0 and row["error"] == "未配置")
 
 
+def t_backups():
+    print("[backups]")
+    import os
+    import sqlite3
+    import tempfile
+    from pathlib import Path
+    from app import backups
+    # 残留免疫:上次 crash 可能留下标记
+    marker = db._DATA_DIR / ".restore-pending"
+    marker.unlink(missing_ok=True)
+
+    # 真实在线备份（开发库,WAL 安全）
+    info = backups.create_backup()
+    p = backups.resolve_name(info["name"])
+    check("在线备份落盘", bool(p) and p.exists() and info["size"] > 0)
+    check("列表含新备份", any(b["name"] == info["name"] for b in backups.list_backups()))
+    check("路径穿越拒绝", backups.resolve_name("../secret.db") is None
+          and backups.resolve_name("x/../../etc.db") is None)
+
+    # 暂存恢复:标记内容正确;不存在的备份拒绝
+    check("暂存恢复标记", backups.stage_restore(info["name"]))
+    check("标记内容正确", marker.exists()
+          and marker.read_text(encoding="utf-8").strip() == info["name"])
+    check("恢复不存在备份拒绝", not backups.stage_restore("hermes-watch-99999999-000000.db"))
+    marker.unlink()  # 不真消费——真实库替换由重启路径验证,这里只测标记与注入路径
+
+    # consume 注入临时目录:备份含 marker 表,还原后数据回到备份时点
+    with tempfile.TemporaryDirectory() as td:
+        d = Path(td)
+        (d / "backups").mkdir()
+        bname = "hermes-watch-20260910-000000.db"
+        c = sqlite3.connect(d / "backups" / bname)
+        c.execute("CREATE TABLE t(x)"); c.execute("INSERT INTO t VALUES(42)"); c.commit(); c.close()
+        target = d / "main.db"
+        c2 = sqlite3.connect(target)
+        c2.execute("CREATE TABLE t(x)"); c2.execute("INSERT INTO t VALUES(0)"); c2.commit(); c2.close()
+        (d / ".restore-pending").write_text(bname, encoding="utf-8")
+        got = backups.consume_restore_if_pending(data_dir=d, db_path=target)
+        con = sqlite3.connect(target)
+        v = con.execute("SELECT x FROM t").fetchone()[0]
+        con.close()
+        check("消费标记→库还原到备份时点", got == bname and v == 42)
+        check("消费后标记清除", not (d / ".restore-pending").exists())
+
+    # 清理真实备份与记账(不留测试痕迹)
+    if p:
+        p.unlink()
+    db.execute("DELETE FROM settings WHERE key='last_backup_ts'")
+
+
 def t_probes():
     print("[probes]")
     from app import i18n, probes
@@ -553,6 +603,7 @@ if __name__ == "__main__":
     t_anonymize()
     t_chat_stream_fallback()
     t_notify_log()
+    t_backups()
     t_probes()
     t_tofu()
     t_ack_and_silence()

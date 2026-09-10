@@ -28,6 +28,16 @@
 
 ## 快速开始
 
+**Linux / macOS 一键安装**（装依赖 + 构建前端 + 可选 systemd 开机自启）：
+
+```bash
+git clone https://github.com/StarrySea1412/hermes-watch.git && cd hermes-watch
+./install.sh                 # 或 sudo ./install.sh --systemd
+./install.sh --update        # 以后升级：拉代码 + 重构 + 重启服务
+```
+
+**Windows 手动安装**：
+
 ```powershell
 # 后端（Windows，Python 3.11+）
 cd backend
@@ -41,7 +51,7 @@ npm install
 npm run dev                          # http://localhost:5273
 ```
 
-**生产模式（单进程）**：`cd frontend && npm run build`，后端自动托管 `frontend/dist`——重启后端后直接访问 `http://127.0.0.1:8800` 即是完整面板（SPA 路由/静态资源/PWA 全部就绪），无需第二个进程。**Docker**：`docker build -t hermes-watch . && docker run -p 8800:8800 -v hermes-data:/data hermes-watch`（数据与密钥持久化在 `/data` 卷，`HW_DATA_DIR` 可重定向）。CI：GitHub Actions 每次 push 自动跑 110 项回归 + 前端构建 + agent 三平台编译检查；打 `v*` tag 自动发布 agent 二进制到 Release。
+**生产模式（单进程）**：`cd frontend && npm run build`，后端自动托管 `frontend/dist`——重启后端后直接访问 `http://127.0.0.1:8800` 即是完整面板（SPA 路由/静态资源/PWA 全部就绪），无需第二个进程。**Docker**：`docker build -t hermes-watch . && docker run -p 8800:8800 -v hermes-data:/data hermes-watch`（数据与密钥持久化在 `/data` 卷，`HW_DATA_DIR` 可重定向；每日自动备份到 `backups/`，设置页可手动备份/恢复）。CI：GitHub Actions 每次 push 自动跑 129 项回归 + 前端构建 + agent 三平台编译检查；打 `v*` tag 自动发布 agent 二进制到 Release。
 
 首次启动自动播种 4 台演示主机（web-1 健康 / db-1 磁盘填满 / app-1 内存泄漏 / cache-1 可疑登录），并自动触发诊断。
 
@@ -96,4 +106,5 @@ npm run dev                          # http://localhost:5273
 - [x] AI 对话流式输出（SSE 逐 token，LLM 关闭自动降级本地规则引擎摘要）+ LLM 出站脱敏（k8sgpt 式 anonymize：主机名/IP/用户名出站前替换占位符，映射不落盘，回答映射回真实名）
 - [x] 巡检心跳条带图（主机详情 48 桶上下状态带）+ PWA 可安装（manifest + service worker，仅生产注册）+ 公开状态页（设置页一键生成带 token 只读分享链接，60s 自动刷新，不含地址/凭据/证据，可随时撤销）+ i18n 全量双语（自建零依赖翻译层，PageHead 一键切 EN/中文；前端全部 UI 文案 + 后端发现/事件/诊断卡/通知留痕/公开状态页均跟随面板语言，历史中文行读出口正则兜底翻译）
 - [x] 多用户与 RBAC（admin/observer 角色：users 表 + 角色签名会话 + observer 只读拦截；存量单口令兼容自动 admin）
+- [x] 运维两件套：一键安装/升级脚本（install.sh：venv + 前端构建 + 可选 systemd 自启，--update 一键升级，HW_PORT 端口可配）、SQLite 每日自动备份（在线 backup API，保留 10 份；设置页手动备份/恢复——恢复走暂存标记、重启生效，避免运行中换库）
 - [x] 服务拨测（对标 Uptime Kuma 拨测 / Gatus 状态机）：URL / TCP 目标拨测（全局/每目标独立周期），Gatus 式条件引擎（状态码 + 关键词包含 + 响应时间上限 + HTTPS 证书剩余天数）与双阈值防抖（连续失败下线 / 连续成功恢复，阈值可配），48 桶心跳条带图 + 延迟显示，翻转才落事件并外发通知（复用免打扰/留痕），手动「立即拨测」，心跳随指标保留期清理

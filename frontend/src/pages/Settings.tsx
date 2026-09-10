@@ -1,12 +1,19 @@
 import { useEffect, useState } from 'react'
 import { api, fmtTime, subscribe, type Host } from '../api'
-import { PageHead } from '../ui'
+import { ConfirmDialog, PageHead } from '../ui'
 import { Ic } from '../icons'
 import { UserAdd } from './UserAdd'
 import { SectionNav, SectionRail, SectionHead } from './SectionNav'
 import { useT } from '../i18n'
 
 type TFn = (key: string, vars?: Record<string, string | number>) => string
+
+// 备份条目（GET /api/backups，后端按文件名倒序）
+type Backup = { name: string; size: number; ts: number }
+
+// 字节数 → 人类可读（备份文件通常 KB~MB 级，B 仅兜底）
+const fmtSize = (n: number) =>
+  n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : n >= 1024 ? `${Math.round(n / 1024)} KB` : `${n} B`
 
 const THRESHOLD_FIELDS: { key: string; label: string; hint: string; def: string }[] = [
   { key: 'disk_warn', label: 'st.thresh.diskWarn', hint: 'st.thresh.def', def: '85' },
@@ -81,6 +88,12 @@ export default function Settings() {
   const [authRole, setAuthRole] = useState('')
   const [users, setUsers] = useState<any[]>([])
   const [legacyPw, setLegacyPw] = useState(true)
+  const [backups, setBackups] = useState<Backup[]>([])
+  const [bkSaved, setBkSaved] = useState(false)
+  const [bkMsg, setBkMsg] = useState('')
+  const [restoreMsg, setRestoreMsg] = useState('')
+  const [restoreTarget, setRestoreTarget] = useState<string | null>(null)
+  const [delTarget, setDelTarget] = useState<string | null>(null)
   const notifyLabels = NOTIFY_LABELS
   const urlField = NOTIFY_URL_FIELD[notifyChannel] ?? { label: 'st.notify.webhookUrl', ph: 'https://…webhook/send?key=…' }
   const sections = SECTIONS(t)
@@ -100,6 +113,7 @@ export default function Settings() {
       setTh(tv)
     }),
     api<any[]>('/notify/log?limit=8').then(setNotifyLog).catch(() => { /* 留痕失败不打断 */ }),
+    api<Backup[]>('/backups').then(setBackups).catch(() => { /* observer 403 / 后端重启时静默留空 */ }),
     api<{ enabled: boolean; token: string }>('/status/token')
       .then(r => setStatusTok(r.token || '')).catch(() => { /* noop */ }),
     api<{ role: string }>('/auth/status').then(s => {
@@ -174,6 +188,34 @@ export default function Settings() {
       setTestRes(r)
     } catch (e: any) { setTestRes({ ok: false, error: e.message }) }
     setTesting(false)
+  }
+
+  // ---------- 备份与恢复（恢复只暂存标记，重启面板后由后端换库生效） ----------
+  const createBackup = async () => {
+    try {
+      await api('/backups', { method: 'POST' })
+      setBkSaved(true); setTimeout(() => setBkSaved(false), 2000)
+      setBkMsg(''); load()
+    } catch (e: any) { setBkMsg(`✕ ${e.message}`) }
+  }
+  const doRestore = async () => {
+    if (!restoreTarget) return
+    const name = restoreTarget
+    setRestoreTarget(null)
+    try {
+      const r = await api<{ staged: boolean; message: string }>(`/backups/${name}/restore`, { method: 'POST' })
+      // 后端 message 已跟随面板语言，直接展示；缺省时回落本地文案
+      setRestoreMsg(r.message || t('st.backup.restoreStaged'))
+    } catch (e: any) { setRestoreMsg(`✕ ${e.message}`) }
+  }
+  const delBackup = async () => {
+    if (!delTarget) return
+    const name = delTarget
+    setDelTarget(null)
+    try {
+      await api(`/backups/${name}`, { method: 'DELETE' })
+      setBkMsg(''); load()
+    } catch (e: any) { setBkMsg(`✕ ${e.message}`) }
   }
 
   return (
@@ -251,6 +293,46 @@ export default function Settings() {
                 {autoReportOn ? t('st.report.everyN', { n: settings.auto_report_min }) : t('st.state.off')}
               </button>
             </div>
+          </div>
+
+          {/* 备份与恢复（SQLite 单文件运维能力：每日自动备份，恢复暂存到重启生效） */}
+          <div className="card p-5">
+            <div className="flex items-start justify-between">
+              <div>
+                <h3 className="font-semibold text-[14.5px] text-[var(--text-hi)]">{t('st.backup.title')}</h3>
+                <p className="text-[12px] text-[var(--text-faint)] mt-1.5 leading-relaxed">
+                  {t('st.backup.desc')}
+                </p>
+              </div>
+              <button className="btn btn-primary shrink-0" onClick={createBackup}>
+                {bkSaved ? t('st.backup.created') : <><Ic name="download" size={13} /> {t('st.backup.create')}</>}
+              </button>
+            </div>
+            <div className="mt-3.5 space-y-1">
+              {backups.map(b => (
+                <div key={b.name} className="flex items-center gap-2.5 text-[11.5px]">
+                  <Ic name="file" size={12} style={{ color: 'var(--text-faint)' }} />
+                  <span className="mono text-[var(--text-mute)] truncate" title={b.name}>{b.name}</span>
+                  <span className="num text-[var(--text-faint)] shrink-0" title={t('st.backup.size')}>{fmtSize(b.size)}</span>
+                  <div className="ml-auto flex items-center gap-2.5 shrink-0">
+                    <button className="text-[11.5px] text-[var(--text-faint)] hover:text-[var(--warn)]"
+                      onClick={() => setRestoreTarget(b.name)}>{t('st.backup.restore')}</button>
+                    <button className="text-[11.5px] text-[var(--text-faint)] hover:text-[var(--crit)]"
+                      onClick={() => setDelTarget(b.name)}>{t('st.backup.delete')}</button>
+                  </div>
+                </div>
+              ))}
+              {!backups.length && <div className="text-[11.5px] text-[var(--text-faint)] py-1">{t('st.backup.empty')}</div>}
+            </div>
+            {/* 恢复暂存提示：成功走 warn 色显著提示重启生效；失败（含 observer 403）按前缀转 crit */}
+            {restoreMsg && (
+              <div className="inset px-3 py-2.5 mt-3 flex items-start gap-2 text-[12px] leading-relaxed"
+                style={{ color: restoreMsg.startsWith('✕') ? 'var(--crit)' : 'var(--warn)' }}>
+                <Ic name="alert" size={13} />
+                <span>{restoreMsg}</span>
+              </div>
+            )}
+            {bkMsg && <div className="text-[12px] mt-2.5" style={{ color: 'var(--crit)' }}>{bkMsg}</div>}
           </div>
       </div>
       </section>
@@ -657,6 +739,14 @@ export default function Settings() {
       </div>
 
       <SectionRail sections={sections} />
+
+      {/* 备份恢复 / 删除确认弹窗 */}
+      <ConfirmDialog open={!!restoreTarget} title={t('st.backup.restoreTitle', { n: restoreTarget ?? '' })}
+        body={t('st.backup.restoreBody')} confirmText={t('st.backup.restore')}
+        onConfirm={doRestore} onCancel={() => setRestoreTarget(null)} />
+      <ConfirmDialog open={!!delTarget} title={t('st.backup.deleteTitle', { n: delTarget ?? '' })}
+        body={t('st.backup.deleteBody')}
+        onConfirm={delBackup} onCancel={() => setDelTarget(null)} />
 
       {/* cc-switch 一键导入弹窗 */}
       {csOpen && (

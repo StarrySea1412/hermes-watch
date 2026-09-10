@@ -11,7 +11,7 @@
 import asyncio
 import traceback
 
-from . import analysis, collector, db, i18n, notify, ports, rules
+from . import analysis, backups, collector, db, i18n, notify, ports, rules
 
 POLL = 60
 _notify_broadcast = None  # set by main.py at startup to avoid a circular import
@@ -292,6 +292,11 @@ def _maybe_retention():
     ev_days = _setting_int("events_retention_days", 30)
     if ev_days > 0:
         db.execute("DELETE FROM events WHERE ts < ?", (db.now() - ev_days * 86400,))
+    # 数据库每日备份（≥24h 才做一次，备份/修剪异常不阻塞巡检主流程）
+    try:
+        backups.maybe_backup_daily()
+    except Exception:
+        pass
 
 
 async def loop():
