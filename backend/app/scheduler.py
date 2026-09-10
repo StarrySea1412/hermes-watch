@@ -283,10 +283,12 @@ async def _maybe_autoreport():
 
 
 def _maybe_retention():
-    """保留策略：metrics 默认 7 天（0=永久），events 默认 30 天（审计表不动）。"""
+    """保留策略：metrics/probe_log 默认 7 天（0=永久），events 默认 30 天（审计表不动）。"""
     days = _setting_int("metrics_retention_days", 7)
     if days > 0:
         db.execute("DELETE FROM metrics WHERE ts < ?", (db.now() - days * 86400,))
+        # 拨测心跳与指标同保留期（默认 7 天）：15~30s 周期下增长不慢于 metrics
+        db.execute("DELETE FROM probe_log WHERE ts < ?", (db.now() - days * 86400,))
     ev_days = _setting_int("events_retention_days", 30)
     if ev_days > 0:
         db.execute("DELETE FROM events WHERE ts < ?", (db.now() - ev_days * 86400,))

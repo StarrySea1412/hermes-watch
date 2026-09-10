@@ -13,7 +13,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
-from . import agent, analysis, auth, ccswitch, db, executor, i18n, mcp_server, notify, ports, reports, rules, scheduler, seed, secrets, terminal
+from . import agent, analysis, auth, ccswitch, db, executor, i18n, mcp_server, notify, ports, probes, reports, rules, scheduler, seed, secrets, terminal
 
 # 前端经 vite 代理（生产同源部署）访问 /api，浏览器永远同源 —— 不开 CORS 面
 
@@ -22,10 +22,12 @@ from . import agent, analysis, auth, ccswitch, db, executor, i18n, mcp_server, n
 async def lifespan(_app: FastAPI):
     db.init_db()
     scheduler.set_broadcaster(broadcast)
+    probes.set_broadcaster(broadcast)
     if seed.seed_if_empty():
         print("[seed] demo fleet created: web-1 / db-1 / app-1 / cache-1")
     asyncio.create_task(scheduler.collect_all())  # 首轮巡检后台跑：端口先监听，SSH 慢主机不阻塞启动
     asyncio.create_task(scheduler.loop())
+    asyncio.create_task(probes.loop())  # 拨测独立循环（15s 步进，与 60s 巡检解耦）
     yield
 
 
@@ -285,7 +287,7 @@ def events(limit: int = 80):
     for r in rows:
         r["data"] = db.uj(r["data"], {})
         # 读出口兜底：历史中文事件行按面板语言翻译（嵌套标题一并处理）
-        r["message"] = i18n.tr_event_message(r["message"])
+        r["message"] = probes.tr_probe_message(i18n.tr_event_message(r["message"]))
     return rows
 
 
@@ -384,6 +386,74 @@ def notify_log(limit: int = 30):
         if r.get("error"):
             r["error"] = i18n.tr_notify_error(r["error"])
     return rows
+
+
+# ---------- 拨测（URL / TCP 服务监控，独立于主机巡检） ----------
+
+class ProbeIn(BaseModel):
+    name: str
+    kind: str = "url"          # url | tcp
+    target: str
+    fail_threshold: int = probes.DEFAULT_FAIL_THRESHOLD
+    success_threshold: int = probes.DEFAULT_SUCCESS_THRESHOLD
+    timeout_s: int = 10
+
+
+@app.get("/api/probes")
+def probes_list():
+    return db.query("SELECT * FROM probes ORDER BY id")
+
+
+@app.post("/api/probes")
+async def probe_add(p: ProbeIn):
+    name = p.name.strip()[:60]
+    target = p.target.strip()
+    if not name or not target:
+        raise HTTPException(400, i18n.t("名称与目标不能为空", "Name and target are required"))
+    kind = p.kind if p.kind in ("url", "tcp") else "url"
+    if kind == "url" and not target.startswith(("http://", "https://")):
+        raise HTTPException(400, i18n.t("URL 拨测目标须以 http:// 或 https:// 开头",
+                                        "URL probe target must start with http:// or https://"))
+    if kind == "tcp" and (":" not in target or not target.rpartition(":")[2].isdigit()):
+        raise HTTPException(400, i18n.t("TCP 拨测目标格式为 主机:端口", "TCP probe target must be host:port"))
+    if db.query_one("SELECT id FROM probes WHERE name=?", (name,)):
+        raise HTTPException(400, i18n.t(f"同名拨测已存在: {name}", f"A probe named {name} already exists"))
+    pid = db.execute(
+        "INSERT INTO probes(name,kind,target,fail_threshold,success_threshold,timeout_s,"
+        "up,fail_streak,succ_streak,created_at) VALUES(?,?,?,?,?,?,1,0,0,?)",
+        (name, kind, target, max(1, p.fail_threshold), max(1, p.success_threshold),
+         max(1, p.timeout_s), db.now()))
+    await broadcast("probe", i18n.t(f"新增拨测: {name} → {target}", f"Probe added: {name} → {target}"),
+                    {"probe_id": pid})
+    return {"id": pid}
+
+
+@app.delete("/api/probes/{pid}")
+async def probe_delete(pid: int):
+    row = db.query_one("SELECT * FROM probes WHERE id=?", (pid,))
+    if not row:
+        raise HTTPException(404, i18n.t("拨测不存在", "Probe not found"))
+    db.execute("DELETE FROM probes WHERE id=?", (pid,))
+    db.execute("DELETE FROM probe_log WHERE probe_id=?", (pid,))
+    await broadcast("probe", i18n.t(f"已删除拨测: {row['name']}", f"Probe removed: {row['name']}"),
+                    {"probe_id": pid})
+    return {"deleted": pid}
+
+
+@app.post("/api/probes/{pid}/run")
+async def probe_run_now(pid: int):
+    """立即拨一次（不看周期），心跳与状态机照常走。"""
+    p = db.query_one("SELECT * FROM probes WHERE id=?", (pid,))
+    if not p:
+        raise HTTPException(404, i18n.t("拨测不存在", "Probe not found"))
+    ok, latency, error = await probes.run_probe(p)
+    await probes.handle_result(p, ok, latency, error)
+    return {"ok": ok, "latency": latency and round(latency), "error": error}
+
+
+@app.get("/api/probes/{pid}/log")
+def probe_log(pid: int, limit: int = 120):
+    return db.query("SELECT * FROM probe_log WHERE probe_id=? ORDER BY ts DESC LIMIT ?", (pid, limit))
 
 
 # ---------- AI chat ----------

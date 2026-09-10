@@ -60,6 +60,25 @@ CREATE TABLE IF NOT EXISTS notify_log(
   ts REAL, kind TEXT, text TEXT, channel TEXT,
   ok INTEGER, error TEXT DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS probes(
+  id INTEGER PRIMARY KEY,
+  name TEXT UNIQUE NOT NULL,
+  kind TEXT DEFAULT 'url',            -- url | tcp
+  target TEXT NOT NULL,               -- https://… 或 host:port
+  up INTEGER DEFAULT 1,               -- 当前状态（首次拨测前假设 up，首次失败计 streak）
+  fail_streak INTEGER DEFAULT 0,
+  succ_streak INTEGER DEFAULT 0,
+  fail_threshold INTEGER DEFAULT 3,   -- 连续 N 次失败 → down（Gatus failure-threshold）
+  success_threshold INTEGER DEFAULT 2,-- down 中连续 N 次成功 → up（Gatus success-threshold）
+  timeout_s INTEGER DEFAULT 10,
+  last_ts REAL, last_latency REAL, last_error TEXT DEFAULT '',
+  last_flip_ts REAL, created_at REAL
+);
+CREATE TABLE IF NOT EXISTS probe_log(
+  id INTEGER PRIMARY KEY,
+  probe_id INTEGER, ts REAL, up INTEGER, latency REAL, error TEXT DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_probe_log ON probe_log(probe_id, ts);
 """
 
 

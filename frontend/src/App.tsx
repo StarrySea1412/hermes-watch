@@ -17,6 +17,7 @@ const Reports = lazy(() => import('./pages/Reports'))
 const TerminalPage = lazy(() => import('./pages/TerminalPage'))
 const Enroll = lazy(() => import('./pages/Enroll'))
 const Settings = lazy(() => import('./pages/Settings'))
+const Probes = lazy(() => import('./pages/Probes'))
 
 function PageFallback() {
   const { t } = useT()
@@ -52,6 +53,7 @@ function Gate() {
             <Route path="/reports" element={<Reports />} />
             <Route path="/terminal" element={<TerminalPage />} />
             <Route path="/enroll" element={<Enroll />} />
+            <Route path="/probes" element={<Probes />} />
             <Route path="/settings" element={<Settings />} />
           </Route>
         </Routes>

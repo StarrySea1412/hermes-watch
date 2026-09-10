@@ -57,6 +57,7 @@ const NAV: { to: string; icon: IconName; key: string; end?: boolean }[] = [
   { to: '/timeline', icon: 'clock', key: 'nav.timeline' },
   { to: '/reports', icon: 'file', key: 'nav.reports' },
   { to: '/enroll', icon: 'zap', key: 'nav.enroll' },
+  { to: '/probes', icon: 'radio', key: 'nav.probes' },
   { to: '/settings', icon: 'sliders', key: 'nav.settings' },
 ]
 

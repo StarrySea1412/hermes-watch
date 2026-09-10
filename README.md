@@ -13,6 +13,8 @@
    ├─ 采集层   SSH 只读探测（asyncssh，并发限流）/ 内置演示模拟器（实时行走曲线）
    │           出站 Agent（beszel 式：目标机 sh+curl 主动 push，免入站端口）
    │           在线判定：3 个巡检周期无成功采集 → 主机标记离线（Fleet/拓扑可视化）
+   ├─ 拨测     URL / TCP 服务拨测（独立 30s 周期，Gatus 式双阈值防抖：
+   │           连续 N 次失败才下线 / 连续 N 次成功才恢复）→ 48 桶心跳条 + 翻转才告警
    ├─ 规则引擎  确定性阈值规则（阈值 + 滞后恢复线，可在设置页调整）→ 发现 + 健康分
    ├─ 告警生命周期  自动恢复（连续 3 轮未再触发 → resolved + 恢复通知带持续时长）
    │           crit 持续告警周期重发 · 免打扰时段（跨午夜）· 多渠道通知
@@ -39,7 +41,7 @@ npm install
 npm run dev                          # http://localhost:5273
 ```
 
-**生产模式（单进程）**：`cd frontend && npm run build`，后端自动托管 `frontend/dist`——重启后端后直接访问 `http://127.0.0.1:8800` 即是完整面板（SPA 路由/静态资源/PWA 全部就绪），无需第二个进程。**Docker**：`docker build -t hermes-watch . && docker run -p 8800:8800 -v hermes-data:/data hermes-watch`（数据与密钥持久化在 `/data` 卷，`HW_DATA_DIR` 可重定向）。CI：GitHub Actions 每次 push 自动跑 86 项回归 + 前端构建 + agent 三平台编译检查；打 `v*` tag 自动发布 agent 二进制到 Release。
+**生产模式（单进程）**：`cd frontend && npm run build`，后端自动托管 `frontend/dist`——重启后端后直接访问 `http://127.0.0.1:8800` 即是完整面板（SPA 路由/静态资源/PWA 全部就绪），无需第二个进程。**Docker**：`docker build -t hermes-watch . && docker run -p 8800:8800 -v hermes-data:/data hermes-watch`（数据与密钥持久化在 `/data` 卷，`HW_DATA_DIR` 可重定向）。CI：GitHub Actions 每次 push 自动跑 110 项回归 + 前端构建 + agent 三平台编译检查；打 `v*` tag 自动发布 agent 二进制到 Release。
 
 首次启动自动播种 4 台演示主机（web-1 健康 / db-1 磁盘填满 / app-1 内存泄漏 / cache-1 可疑登录），并自动触发诊断。
 
@@ -63,6 +65,7 @@ npm run dev                          # http://localhost:5273
 
 - **出站 Agent（推荐）**：接入中心页生成 Token → 目标机运行 [Go 单二进制](agent-go/README.md)（HMAC 签名防重放，上报进程/失败服务/证书），或下载 `hermes-watch-agent.sh`（sh + curl，纯只读）。机器在内网/防火墙后无需开入站端口，指标每 60s 主动推送
 - **SSH 拉取**：设置页填 `名称/IP/用户/密码`，巡检走 SSH 只读探测（top/free/df/ps/systemctl/last/openssl）
+- **服务拨测**：拨测页添加 URL（`https://…/health`）或 TCP（`host:port`）目标，30s 周期自动拨测；双阈值防抖（默认连续 3 次失败下线 / 2 次成功恢复），下线/恢复事件进时间线并外发通知，48 桶心跳条带图看历史
 - **Docker 演示 fleet**：`cp .env.example .env` 填入公钥 → `docker compose up -d`（2221-2223 端口）
 - **故障注入**：`./chaos.sh disk demo-db-1` 观察告警→诊断→提案全链路
 - **WSL 当服务器（已实战验证）**：`sudo apt install openssh-server && systemctl enable --now ssh`，把 WSL IP（`hostname -I`）添加进面板。密码留空 = 自动使用本机 `~/.ssh/id_ed25519` 密钥免密登录（公钥需在目标机 `authorized_keys` 中）。注意：WSL2 空闲约 60s 会回收整个 VM，sshd 随之消失——保持 WSL 终端开着，或在 `%UserProfile%\.wslconfig` 配 `[wsl2] vmIdleTimeout=-1`
@@ -93,3 +96,4 @@ npm run dev                          # http://localhost:5273
 - [x] AI 对话流式输出（SSE 逐 token，LLM 关闭自动降级本地规则引擎摘要）+ LLM 出站脱敏（k8sgpt 式 anonymize：主机名/IP/用户名出站前替换占位符，映射不落盘，回答映射回真实名）
 - [x] 巡检心跳条带图（主机详情 48 桶上下状态带）+ PWA 可安装（manifest + service worker，仅生产注册）+ 公开状态页（设置页一键生成带 token 只读分享链接，60s 自动刷新，不含地址/凭据/证据，可随时撤销）+ i18n 全量双语（自建零依赖翻译层，PageHead 一键切 EN/中文；前端全部 UI 文案 + 后端发现/事件/诊断卡/通知留痕/公开状态页均跟随面板语言，历史中文行读出口正则兜底翻译）
 - [x] 多用户与 RBAC（admin/observer 角色：users 表 + 角色签名会话 + observer 只读拦截；存量单口令兼容自动 admin）
+- [x] 服务拨测（对标 Uptime Kuma 拨测 / Gatus 状态机）：URL / TCP 目标独立 30s 周期拨测，Gatus 式双阈值防抖（连续失败下线 / 连续成功恢复，阈值可配），48 桶心跳条带图 + 延迟显示，翻转才落事件并外发通知（复用免打扰/留痕），手动「立即拨测」，心跳随指标保留期清理

@@ -316,6 +316,97 @@ def t_notify_log():
     check("未配置渠道 ok=0 error=未配置", row["ok"] == 0 and row["error"] == "未配置")
 
 
+def t_probes():
+    print("[probes]")
+    from app import i18n, probes
+    # 残留免疫：上次中途 crash 可能留下同名行（UNIQUE name），先清
+    db.execute("DELETE FROM probes WHERE name='__t_probe__'")
+    db.execute("DELETE FROM probe_log WHERE probe_id NOT IN (SELECT id FROM probes)")
+    db.execute("DELETE FROM events WHERE kind='probe' AND message LIKE '%__t_probe__%'")
+    # 现场免疫：占位/文案跟随面板语言，固定 zh 测模板断言，测完还原
+    prev_lang = db.query_one("SELECT value FROM settings WHERE key='hw_lang'")
+    db.execute("INSERT INTO settings(key,value) VALUES('hw_lang','zh') "
+               "ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+
+    pid = db.execute(
+        "INSERT INTO probes(name,kind,target,fail_threshold,success_threshold,timeout_s,"
+        "up,fail_streak,succ_streak,created_at) VALUES('__t_probe__','url',"
+        "'http://127.0.0.1:9',3,2,2,1,0,0,?)", (db.now(),))
+    p = db.query_one("SELECT * FROM probes WHERE id=?", (pid,))
+
+    # 真实拨测一个必然失败的端口（组合失败计数）——不依赖外网
+    ok, latency, error = asyncio.run(probes.run_probe(
+        {"kind": "tcp", "target": "127.0.0.1:9", "timeout_s": 1}))
+    check("TCP 死端口判失败", not ok and error)
+    ok2, latency2, _ = asyncio.run(probes.run_probe(
+        {"kind": "url", "target": "https://127.0.0.1:9/x", "timeout_s": 1}))
+    check("URL 死端口判失败", not ok2)
+
+    # TCP 成功路径（本地起临时 echo 服务器，防回归：open_connection 元组解包）
+    async def _tcp_ok():
+        async def _handle(reader, writer):
+            writer.close()
+        server = await asyncio.start_server(_handle, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        try:
+            return await probes.run_probe({"kind": "tcp", "target": f"127.0.0.1:{port}", "timeout_s": 3})
+        finally:
+            server.close()
+    ok3, latency3, err3 = asyncio.run(_tcp_ok())
+    check("TCP 连通判成功", ok3 and latency3 and latency3 > 0, err3)
+
+    # 状态机：up 中 2 次失败不打翻（防抖），第 3 次才 down
+    r1 = probes.evaluate(p, False)
+    p = db.query_one("SELECT * FROM probes WHERE id=?", (pid,))
+    r2 = probes.evaluate(p, False)
+    p = db.query_one("SELECT * FROM probes WHERE id=?", (pid,))
+    check("两次失败未翻转", r1 is None and r2 is None and p["up"] == 1)
+    r3 = probes.evaluate(p, False)
+    check("连续 3 次失败 → down", r3 == "down")
+    p = db.query_one("SELECT * FROM probes WHERE id=?", (pid,))
+    check("down 后 fail_streak 保持", p["up"] == 0 and p["fail_streak"] >= 3)
+
+    # down 中 1 次成功不恢复（success_threshold=2），第 2 次才 up
+    p["_latency"], p["_error"] = 12.3, ""
+    s1 = probes.evaluate(p, True)
+    p = db.query_one("SELECT * FROM probes WHERE id=?", (pid,))
+    s2 = probes.evaluate(p, True)
+    check("一次成功未恢复", s1 is None)
+    check("连续 2 次成功 → up", s2 == "up")
+    p = db.query_one("SELECT * FROM probes WHERE id=?", (pid,))
+    check("恢复后 streak 清零", p["up"] == 1 and p["fail_streak"] == 0)
+
+    # handle_result: 翻转落事件 + 心跳留痕（notify 未配置只留痕不外呼）。
+    # 状态机要求连续 fail_threshold 次失败才翻转，先压 2 次失败再走 handle_result 第 3 次
+    p = db.query_one("SELECT * FROM probes WHERE id=?", (pid,))
+    p["_latency"], p["_error"] = None, "ECONNREFUSED"
+    probes.evaluate(p, False)
+    p = db.query_one("SELECT * FROM probes WHERE id=?", (pid,))
+    p["_latency"], p["_error"] = None, "ECONNREFUSED"
+    probes.evaluate(p, False)
+    p = db.query_one("SELECT * FROM probes WHERE id=?", (pid,))
+    asyncio.run(probes.handle_result(p, False, None, "ECONNREFUSED"))
+    ev = db.query_one("SELECT message FROM events WHERE kind='probe' ORDER BY id DESC LIMIT 1")
+    check("下线翻转落事件", ev and ev["message"].startswith("拨测下线"))
+    log = db.query_one("SELECT * FROM probe_log WHERE probe_id=? ORDER BY id DESC LIMIT 1", (pid,))
+    check("心跳已留痕", log and log["up"] == 0 and log["error"] == "ECONNREFUSED")
+
+    # 出口兜底:EN 语言下历史 zh 消息翻译
+    db.execute("UPDATE settings SET value='en' WHERE key='hw_lang'")
+    check("下线事件 EN 兜底", probes.tr_probe_message("拨测下线: x（y）— boom") == "Probe down: x（y）— boom")
+    check("恢复事件 EN 兜底含时长归一",
+          probes.tr_probe_message("拨测恢复: x（y，持续 5 分钟）") == "Probe recovered: x (y, was down for 5 min)")
+    db.execute("UPDATE settings SET value='zh' WHERE key='hw_lang'")
+
+    db.execute("DELETE FROM probes WHERE id=?", (pid,))
+    db.execute("DELETE FROM probe_log WHERE probe_id=?", (pid,))
+    db.execute("DELETE FROM events WHERE kind='probe' AND message LIKE '%__t_probe__%'")
+    if prev_lang:
+        db.execute("UPDATE settings SET value=? WHERE key='hw_lang'", (prev_lang["value"],))
+    else:
+        db.execute("DELETE FROM settings WHERE key='hw_lang'")
+
+
 def t_tofu():
     print("[tofu]")
     from app import ssh
@@ -429,6 +520,7 @@ if __name__ == "__main__":
     t_anonymize()
     t_chat_stream_fallback()
     t_notify_log()
+    t_probes()
     t_tofu()
     t_ack_and_silence()
     t_rbac()
