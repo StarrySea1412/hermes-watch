@@ -115,20 +115,51 @@ export function Layout() {
       }
     })
   }, [])
+
+  // 液态玻璃感光：卡片高光跟随指针。事件委托只写当前悬停卡片的 --mx/--my（rAF 节流），
+  // glare 由 .card 的 radial-gradient 背景层渲染——背景天然裁进圆角，不需要伪元素
+  useEffect(() => {
+    let raf = 0
+    let el: HTMLElement | null = null
+    let x = 0, y = 0
+    const apply = () => {
+      raf = 0
+      if (!el) return
+      const r = el.getBoundingClientRect()
+      el.style.setProperty('--mx', `${x - r.left}px`)
+      el.style.setProperty('--my', `${y - r.top}px`)
+    }
+    const onMove = (e: PointerEvent) => {
+      const t = (e.target as Element | null)?.closest?.('.card') as HTMLElement | null
+      if (t !== el && el) { el.style.removeProperty('--mx'); el.style.removeProperty('--my') }
+      el = t
+      if (!el) return
+      x = e.clientX; y = e.clientY
+      if (!raf) raf = requestAnimationFrame(apply)
+    }
+    window.addEventListener('pointermove', onMove, { passive: true })
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      if (raf) cancelAnimationFrame(raf)
+      el?.style.removeProperty('--mx')
+      el?.style.removeProperty('--my')
+    }
+  }, [])
+
   return (
     <div className="flex h-screen overflow-hidden">
       {/* 桌面侧栏（≥lg） */}
-      <aside className="hidden lg:flex w-60 shrink-0 border-r border-[var(--border)] flex-col p-4 gap-1 bg-[var(--bg-panel)]/60">
+      <aside className="hidden lg:flex w-60 shrink-0 border-r border-[var(--border)] flex-col p-4 gap-1 glass-bar">
         <SidebarInner />
       </aside>
       {/* 移动端抽屉侧栏（<lg），点导航或遮罩关闭 */}
       {menuOpen && <div className="lg:hidden fixed inset-0 z-40 bg-black/55" onClick={() => setMenuOpen(false)} />}
-      <aside className={`lg:hidden fixed inset-y-0 left-0 z-50 w-64 max-w-[82vw] border-r border-[var(--border)] flex flex-col p-4 gap-1 bg-[var(--bg-panel)] transition-transform duration-200 ${menuOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+      <aside className={`lg:hidden fixed inset-y-0 left-0 z-50 w-64 max-w-[82vw] border-r border-[var(--border)] flex flex-col p-4 gap-1 glass-bar-strong transition-transform duration-200 ${menuOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         <SidebarInner onNavigate={() => setMenuOpen(false)} />
       </aside>
       <div className="flex-1 flex flex-col min-w-0">
         {/* 移动端顶栏（<lg） */}
-        <header className="lg:hidden shrink-0 h-14 flex items-center gap-3 px-4 border-b border-[var(--border)] bg-[var(--bg-panel)]/60">
+        <header className="lg:hidden shrink-0 h-14 flex items-center gap-3 px-4 border-b border-[var(--border)] glass-bar">
           <button className="btn btn-ghost" style={{ padding: '6px 10px' }}
             onClick={() => setMenuOpen(true)} aria-label={t('ui.menu.open')}><Ic name="menu" size={17} /></button>
           <div className="font-bold text-[14px] text-[var(--text-hi)] tracking-wide flex items-center gap-2 min-w-0">
