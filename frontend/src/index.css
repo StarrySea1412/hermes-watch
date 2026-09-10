@@ -72,16 +72,17 @@
   --topo-ring: rgba(129, 152, 194, 0.09);
   --topo-glow: rgba(34, 211, 238, 0.06);
 
-  /* 液态玻璃层：半透明面板 + 折射模糊 + 顶缘高光 + 感光眩光 */
-  --glass-bg: rgba(15, 23, 42, 0.42);
-  --glass-strong: rgba(10, 16, 30, 0.78);
-  --glass-blur: 26px;
-  --glass-saturate: 180%;
-  --glass-bright: 1.08;
-  --glass-hi: rgba(255, 255, 255, 0.16);
-  --glass-edge: rgba(255, 255, 255, 0.05);
-  --glass-ring: rgba(255, 255, 255, 0.07);
-  --glass-glare: rgba(170, 220, 255, 0.16);
+  /* 液态玻璃层：重磨砂（高模糊+奶感底+颗粒），折射漂移光斑 */
+  --glass-bg: rgba(19, 29, 50, 0.58);
+  --glass-strong: rgba(11, 17, 32, 0.82);
+  --glass-blur: 40px;
+  --glass-saturate: 200%;
+  --glass-bright: 1.1;
+  --glass-hi: rgba(255, 255, 255, 0.18);
+  --glass-edge: rgba(255, 255, 255, 0.06);
+  --glass-ring: rgba(255, 255, 255, 0.08);
+  --glass-glare: rgba(170, 220, 255, 0.18);
+  --glass-bloom: inset 0 0 28px rgba(173, 216, 255, 0.07);
 
   color-scheme: dark;
 }
@@ -145,16 +146,17 @@ html.light {
   --topo-ring: rgba(70, 92, 132, 0.12);
   --topo-glow: rgba(8, 145, 178, 0.05);
 
-  /* 液态玻璃层（白昼灯塔：白玻璃 + 更亮高光） */
-  --glass-bg: rgba(255, 255, 255, 0.48);
-  --glass-strong: rgba(255, 255, 255, 0.85);
-  --glass-blur: 26px;
-  --glass-saturate: 160%;
-  --glass-bright: 1.02;
+  /* 液态玻璃层（白昼灯塔：奶白重磨砂 + 更亮高光） */
+  --glass-bg: rgba(255, 255, 255, 0.62);
+  --glass-strong: rgba(255, 255, 255, 0.88);
+  --glass-blur: 40px;
+  --glass-saturate: 170%;
+  --glass-bright: 1.03;
   --glass-hi: rgba(255, 255, 255, 0.95);
   --glass-edge: rgba(15, 23, 42, 0.05);
-  --glass-ring: rgba(255, 255, 255, 0.55);
-  --glass-glare: rgba(255, 255, 255, 0.65);
+  --glass-ring: rgba(255, 255, 255, 0.6);
+  --glass-glare: rgba(255, 255, 255, 0.7);
+  --glass-bloom: inset 0 0 30px rgba(255, 255, 255, 0.45);
 
   color-scheme: light;
 }
@@ -198,17 +200,19 @@ body::before {
 html.dark {
   --glow-1: rgba(34, 211, 238, 0.07);
   --glow-2: rgba(167, 139, 250, 0.06);
-  --blob-1: rgba(34, 211, 238, 0.22);
-  --blob-2: rgba(139, 92, 246, 0.19);
-  --blob-3: rgba(244, 114, 182, 0.12);
+  --blob-1: rgba(34, 211, 238, 0.26);
+  --blob-2: rgba(139, 92, 246, 0.22);
+  --blob-3: rgba(244, 114, 182, 0.15);
 }
 html.light {
   --glow-1: rgba(6, 182, 212, 0.08);
   --glow-2: rgba(124, 58, 237, 0.06);
-  --blob-1: rgba(6, 182, 212, 0.17);
-  --blob-2: rgba(139, 92, 246, 0.14);
-  --blob-3: rgba(244, 114, 182, 0.11);
+  --blob-1: rgba(6, 182, 212, 0.2);
+  --blob-2: rgba(139, 92, 246, 0.16);
+  --blob-3: rgba(244, 114, 182, 0.13);
 }
+/* 磨砂颗粒纹理（SVG 噪声，低透明度平铺，给玻璃"砂面"质感并消除渐变色带） */
+html { --frost: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='0.05'/%3E%3C/svg%3E"); }
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -228,16 +232,17 @@ html.light {
 }
 
 /* ---------- 通用组件类 ---------- */
-/* 液态玻璃卡片：三层背景 = 感光眩光（指针跟随，--mx/--my 由 ui.tsx 写入）
-   + 顶部镜面渐变 + 半透明玻璃底；backdrop 实时折射下层漂移光斑 */
+/* 液态磨砂玻璃卡片：感光眩光（--mx/--my 由 ui.tsx 写入）+ 磨砂颗粒 + 顶部镜面
+   + 半透明奶感玻璃底；backdrop 重模糊折射下层漂移光斑 */
 .card {
   background:
     radial-gradient(340px at var(--mx, 50%) var(--my, -40%), var(--glass-glare), transparent 70%),
+    var(--frost),
     linear-gradient(180deg, var(--card-sheen-from), var(--card-sheen-to)),
     var(--glass-bg);
   border: 1px solid var(--border);
   border-radius: 14px;
-  box-shadow: inset 0 1px 0 var(--glass-hi), inset 0 -1px 0 var(--glass-edge),
+  box-shadow: var(--glass-bloom), inset 0 1px 0 var(--glass-hi), inset 0 -1px 0 var(--glass-edge),
               0 0 0 1px var(--glass-ring), var(--card-shadow);
   transition: border-color .18s ease, transform .18s ease, box-shadow .18s ease;
 }
@@ -261,7 +266,7 @@ html.light {
 html.light { --card-shadow-hover: 0 14px 34px -12px rgba(15, 23, 42, 0.22); }
 /* 顶栏/侧栏玻璃面（移动端抽屉用 strong：盖在内容上需要更高不透明度） */
 .glass-bar, .glass-bar-strong { background: var(--glass-bg); }
-.glass-bar-strong { --glass-blur: 32px; background: var(--glass-strong); }
+.glass-bar-strong { --glass-blur: 48px; background: var(--glass-strong); }
 /* backdrop-filter 标准与 -webkit 前缀分两条规则声明（选择器不同防止构建器合并重写） */
 .card, .glass-bar, .glass-bar-strong { -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate)) brightness(var(--glass-bright)); }
 html .card, html .glass-bar, html .glass-bar-strong { backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate)) brightness(var(--glass-bright)); }
