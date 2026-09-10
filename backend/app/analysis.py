@@ -30,6 +30,8 @@ DEEP_DIVE = {
     "login": [("审计登录记录", "Audit login records"), LOGIN_PROBE],
     "service": [("查看失败详情", "Inspect failure details"),
                 "systemctl status {service} --no-pager -l | head -20"],
+    "container": [("查看容器详情", "Inspect container details"),
+                  "docker inspect {name} --format '{{.State.ExitCode}} {{.State.Error}} {{.RestartCount}}' 2>/dev/null | head -5"],
 }
 
 # 修复提案：命令不翻译，title/reason 双语（en 表与 zh 表结构对齐，仿 reports.py 的 RECO/RECO_EN 先例）
@@ -98,6 +100,7 @@ REAL_CHAIN = {
     "cert": ["证书剩余有效期低于阈值（规则判定）", "续签并重新部署"],
     "cpu": ["CPU 持续高于阈值（规则判定）", "ps 定位热点进程（见执行轨迹）"],
     "load": ["系统负载过高（规则判定）", "结合 CPU/IO 排队定位"],
+    "container": ["容器不在运行状态（规则判定）", "docker inspect 已取回退出码（见执行轨迹）", "按退出原因修复后重启容器"],
 }
 REAL_CHAIN_EN = {
     "disk": ["Disk usage crossed the threshold (rule verdict)",
@@ -115,6 +118,7 @@ REAL_CHAIN_EN = {
     "cpu": ["CPU persistently above the threshold (rule verdict)",
             "ps locates the hot process (see execution trace)"],
     "load": ["System load too high (rule verdict)", "Correlate with CPU/IO queuing"],
+    "container": ["Container is not running (rule verdict)", "docker inspect returned the exit code (see execution trace)", "Fix per the exit reason, then restart the container"],
 }
 
 # ---- 历史中文诊断卡的反查表（i18n.tr_card 在 EN 面板下读出口调用） ----
@@ -160,6 +164,9 @@ def _rule_root_cause(finding: dict) -> str:
     if t == "cert":
         return i18n.t(f"证书剩余 {ev.get('days', '?')} 天，低于告警阈值",
                       f"Certificate has {ev.get('days', '?')} days left — below the alert threshold")
+    if t == "container":
+        return i18n.t(f"容器 {ev.get('name', '?')} 处于 {ev.get('state', '?')} 状态，退出原因以 docker inspect 为准",
+                      f"Container {ev.get('name', '?')} is in {ev.get('state', '?')} state — check docker inspect for the exit reason")
     return i18n.t("规则引擎确认指标越限，证据见执行轨迹",
                   "Rule engine confirmed the metric breach — evidence in the execution trace")
 
@@ -470,10 +477,13 @@ async def analyze_finding(host: dict, finding: dict) -> dict:
         steps = _mock_evidence_for(finding)
     elif finding["type"] in DEEP_DIVE:
         from . import collector
-        svc = (db.uj(finding["evidence"], {}) or {}).get("service", "")
+        ev2 = db.uj(finding["evidence"], {}) or {}
+        svc = ev2.get("service", "")
+        cname = ev2.get("name", "")
         label = i18n.t(*DEEP_DIVE[finding["type"]][0])
         cmd = DEEP_DIVE[finding["type"]][1]
-        real_cmd = cmd.format(service=svc or "nginx")
+        # replace 而非 format:docker inspect 的 {{.State.*}} 花括号不能被 str.format 吃掉
+        real_cmd = cmd.replace("{service}", svc or "nginx").replace("{name}", cname or "main")
         try:
             # 真实执行深挖命令拿真实输出（只读探针），不再是 extras 的 dict 转储
             out = (await collector.run_cmd(host, real_cmd)).strip()

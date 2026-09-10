@@ -31,6 +31,8 @@ DETAIL_PROBES = {
     "logins": "last -n 12 -w 2>/dev/null || last -n 12",
     "cert": "for d in /etc/letsencrypt/live/*/cert.pem; do openssl x509 -enddate -noout -in $d 2>/dev/null; done",
     "ports": "ss -tlnpH 2>/dev/null || ss -tlnp 2>/dev/null",
+    # 容器清单(docker 缺失时输出为空,解析得空列表):state 只认官方取值 running/exited/dead/created/paused/restarting
+    "docker": "docker ps -a --format '{{.Names}}|{{.State}}|{{.Status}}|{{.Image}}' 2>/dev/null",
 }
 
 KNOWN_IPS = {"10.", "192.168.", "172.", "127."}
@@ -84,6 +86,18 @@ def parse_probe(out: str) -> dict:
     return m
 
 
+def parse_containers(out: str) -> list[dict]:
+    """docker ps -a --format 'Names|State|Status|Image' 输出 → [{name,state,status,image}]。
+    名字含 | 的容器极罕见,按 3 段切忽略多余;字段不足的行跳过。"""
+    out2 = []
+    for line in out.splitlines():
+        parts = line.split('|', 3)
+        if len(parts) != 4 or not parts[0].strip():
+            continue
+        out2.append({"name": parts[0].strip(), "state": parts[1].strip(),
+                     "status": parts[2].strip(), "image": parts[3].strip()})
+    return out2
+
 def parse_cert_days(out: str):
     # notAfter=Sep 20 12:00:00 2026 GMT
     import datetime
@@ -136,8 +150,9 @@ async def probe_real(host: dict) -> tuple[dict | None, dict]:
         base = parse_probe(r.stdout)
         # 键恒存在：单个探针失败（精简发行版缺 last/openssl 等）时前端拿到的 extras 结构仍完整
         extras: dict = {"failed_services": [], "logins": [], "suspicious_logins": [],
+                        "docker_containers": [],
                         "cert_days_left": None, "ports": []}
-        for key in ("top_proc", "failed_services", "logins", "cert", "ports"):
+        for key in ("top_proc", "failed_services", "logins", "cert", "ports", "docker"):
             try:  # 精简发行版可能缺 last/openssl 等，单探针缺失不拖垮采集
                 r = await conn.run(DETAIL_PROBES[key], check=True)
             except Exception:
@@ -153,6 +168,8 @@ async def probe_real(host: dict) -> tuple[dict | None, dict]:
                 extras["cert_days_left"] = parse_cert_days(r.stdout)
             elif key == "ports":
                 extras["ports"] = parse_ports(r.stdout)
+            elif key == "docker":
+                extras["docker_containers"] = parse_containers(r.stdout)
         return base, extras
     finally:
         conn.close()

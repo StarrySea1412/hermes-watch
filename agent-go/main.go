@@ -45,6 +45,14 @@ type Extra struct {
 	DiskIOWrite  float64      `json:"disk_io_write,omitempty"` // KiB/s
 	TempC        float64      `json:"temp_c,omitempty"`        // 主温度传感器 °C（无传感器时为 0 不上报）
 	Ports        []PortListen `json:"ports,omitempty"`         // LISTEN 端口清点（业务暴露面侦查）
+	Containers   []Container  `json:"docker_containers,omitempty"` // docker ps -a 清单（非 running 触发发现）
+}
+
+type Container struct {
+	Name   string `json:"name"`
+	State  string `json:"state"`
+	Status string `json:"status"`
+	Image  string `json:"image"`
 }
 
 type Payload struct {
@@ -245,6 +253,27 @@ func readFailedServices() []string {
 		}
 	}
 	return failed
+}
+
+func readContainers() []Container {
+	out := sh("docker ps -a --format '{{.Names}}|{{.State}}|{{.Status}}|{{.Image}}'")
+	if out == "" {
+		return nil // docker 未安装/无权限 → 视为无容器，不上报
+	}
+	var cs []Container
+	for _, line := range strings.Split(out, "\n") {
+		parts := strings.SplitN(line, "|", 4)
+		if len(parts) != 4 || strings.TrimSpace(parts[0]) == "" {
+			continue
+		}
+		cs = append(cs, Container{
+			Name:   strings.TrimSpace(parts[0]),
+			State:  strings.TrimSpace(parts[1]),
+			Status: strings.TrimSpace(parts[2]),
+			Image:  strings.TrimSpace(parts[3]),
+		})
+	}
+	return cs
 }
 
 func readCertDays() *int {
@@ -486,7 +515,7 @@ func collect() (Payload, string) {
 		Load1: round2(load1),
 	}
 	p.NetIn, p.NetOut = readNet()
-	ex := &Extra{TopProc: readTopProcs(), FailedSvcs: readFailedServices(), CertDaysLeft: readCertDays(), Ports: readPorts()}
+	ex := &Extra{TopProc: readTopProcs(), FailedSvcs: readFailedServices(), CertDaysLeft: readCertDays(), Ports: readPorts(), Containers: readContainers()}
 	if len(ex.Ports) == 0 {
 		ex.Ports = nil // 空清单省略字段，后端按未上报处理
 	}
@@ -498,7 +527,7 @@ func collect() (Payload, string) {
 		ex.TempC = round1(t)
 	}
 	if ex.TopProc != "" || len(ex.FailedSvcs) > 0 || ex.CertDaysLeft != nil || len(ex.Ports) > 0 ||
-		ex.DiskIORead > 0 || ex.DiskIOWrite > 0 || ex.TempC > 0 {
+		ex.DiskIORead > 0 || ex.DiskIOWrite > 0 || ex.TempC > 0 || len(ex.Containers) > 0 {
 		p.Extra = ex
 	}
 	body, _ := json.Marshal(p)

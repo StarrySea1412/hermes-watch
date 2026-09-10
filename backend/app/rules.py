@@ -128,6 +128,19 @@ def evaluate(host: dict, latest: dict | None, extras: dict) -> list[dict]:
         add("login", "crit", f"可疑登录: {ln['user']}@{ln['ip']}",
             f"Suspicious login: {ln['user']}@{ln['ip']}",
             "非常见来源的 root/sudo 登录", "root/sudo login from an uncommon source", ln)
+    for c in extras.get("docker_containers", []):
+        # 非运行态才告警;restarting/paused 是暂态不追。dead 比普通退出更严重
+        state = (c.get("state") or "").strip()
+        if state in ("running", "restarting", "paused", ""):
+            continue
+        name = (c.get("name") or "?").strip()
+        status = (c.get("status") or "").strip()
+        sev = "crit" if state == "dead" else "warn"
+        add("container", sev, f"容器退出: {name}（{state}）",
+            f"Container not running: {name} ({state})",
+            f"docker 报告容器状态 {state}" + (f"（{status}）" if status else ""),
+            f"docker reports container state {state}" + (f" ({status})" if status else ""),
+            {"name": name, "state": state, "status": status, "image": (c.get("image") or "").strip()})
     cert = extras.get("cert_days_left")
     if cert is not None and cert <= T["cert_days"]:
         sev = "warn" if cert > 3 else "crit"

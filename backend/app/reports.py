@@ -22,7 +22,7 @@ REPORT_I18N = {
         "brand": "本地巡检平台", "title": "服务器巡检健康报告",
         "no": "报告编号", "trigger": "触发方式", "gen_at": "生成时间",
         "range": "数据范围", "points": "个采集点",
-        "auto": "定时巡检", "manual": "手动生成",
+        "auto": "定时巡检", "manual": "手动生成", "diag": "诊断自动",
         "s1": "执行摘要", "verdict_line": "结论", "keep": "保持现有巡检节奏",
         "act": "按下方优先级依次处置", "hosts_n": "台主机", "ok": "健康",
         "watch": "关注", "act_n": "处置", "findings_n": "条待处理发现",
@@ -47,7 +47,7 @@ REPORT_I18N = {
         "brand": "Local Inspection Platform", "title": "Server Health Inspection Report",
         "no": "Report No.", "trigger": "Trigger", "gen_at": "Generated",
         "range": "Data Range", "points": "samples",
-        "auto": "Scheduled", "manual": "Manual",
+        "auto": "Scheduled", "manual": "Manual", "diag": "Diagnosis-triggered",
         "s1": "Executive Summary", "verdict_line": "Verdict", "keep": "keep the current inspection cadence",
         "act": "remediate by the priority list below", "hosts_n": "hosts", "ok": "Healthy",
         "watch": "Watch", "act_n": "Action", "findings_n": "open findings",
@@ -163,7 +163,7 @@ def _pct(v) -> str:
 
 def generate(kind: str = "manual") -> dict:
     L = _report_labels()
-    kind_label = L["auto"] if kind == "auto" else L["manual"]
+    kind_label = L.get(kind) or L["manual"]
     reco_table = RECO_EN if _report_lang() == "en" else RECO
     hosts = db.query("SELECT * FROM hosts ORDER BY id")
     gen_ts = db.now()

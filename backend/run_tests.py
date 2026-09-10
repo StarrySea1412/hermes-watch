@@ -53,6 +53,19 @@ def t_rules():
     check("extras → service/login/cert 发现",
           types.get("service") == "crit" and types.get("login") == "crit" and types.get("cert") == "warn")
 
+    # 容器监控:非 running 触发 container 发现(running/restarting/paused 不触发,dead 更严)
+    f2 = rules.evaluate({"id": 1}, {"disk": 10, "mem": 10, "cpu": 10, "load1": 0.5}, {
+        "docker_containers": [
+            {"name": "db", "state": "exited", "status": "Exited (137) 2h ago", "image": "postgres:16"},
+            {"name": "cache", "state": "running", "status": "Up 3 days", "image": "redis"},
+            {"name": "worker", "state": "restarting", "status": "Restarting", "image": "w"},
+            {"name": "bad", "state": "dead", "status": "Dead", "image": "b"},
+        ]})
+    ct = {x["title"]: x["severity"] for x in f2 if x["type"] == "container"}
+    check("容器发现:exited 警告/dead 严重/running 忽略",
+          len(ct) == 2 and any(v == "warn" for v in ct.values()) and any(v == "crit" for v in ct.values()))
+    check("容器发现标题带名字与状态", any("db" in k and "exited" in k for k in ct))
+
     check("健康分: 无发现=100", rules.health_score([]) == 100)
     check("健康分: crit 扣 25", rules.health_score([{"severity": "crit"}]) == 75)
     check("健康分: 下限 0", rules.health_score([{"severity": "crit"}] * 5) == 0)

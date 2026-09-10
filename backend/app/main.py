@@ -207,6 +207,13 @@ async def analyze(fid: int):
         asyncio.ensure_future(notify.send(i18n.t("诊断完成", "Diagnosis completed"),
                                           i18n.t(f"{h['name']}: {f['title']} → {card.get('root_cause', '')[:80]}",
                                                  f"{h['name']}: {f['title']} → {card.get('root_cause', '')[:80]}")))
+        # Aurora Actions 式「诊断后留档」：crit 诊断完成且开关开启 → 自动生成一份诊断时点报告
+        _ron = (db.query_one("SELECT value FROM settings WHERE key='report_on_diag'") or {}).get("value")
+        if _ron == "on":
+            r = reports.generate("diag")
+            await broadcast("report", i18n.t(f"诊断触发自动报告 #{r['id']}（整体 {r['overall']} 分）",
+                                             f"Diagnosis-triggered report #{r['id']} generated (overall {r['overall']})"),
+                            {"report_id": r["id"]})
     return card
 
 

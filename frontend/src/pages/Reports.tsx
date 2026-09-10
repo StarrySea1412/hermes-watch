@@ -77,8 +77,10 @@ export default function Reports() {
                   <span className="text-[13.5px] font-semibold text-[var(--text-hi)]">{t('rep.num', { n: r.id })}</span>
                   <span className="pill" style={r.kind === 'auto'
                     ? { background: 'var(--violet-bg)', color: 'var(--violet)', fontSize: 10 }
-                    : { background: 'var(--neutral-bg)', color: 'var(--text-mute)', fontSize: 10 }}>
-                    {r.kind === 'auto' ? t('rep.auto') : t('rep.manual')}
+                    : r.kind === 'diag'
+                      ? { background: 'var(--accent-dim)', color: 'var(--accent)', fontSize: 10 }
+                      : { background: 'var(--neutral-bg)', color: 'var(--text-mute)', fontSize: 10 }}>
+                    {r.kind === 'auto' ? t('rep.auto') : r.kind === 'diag' ? t('rep.diag') : t('rep.manual')}
                   </span>
                 </div>
                 <div className="text-[11px] text-[var(--text-faint)] mt-1 num">

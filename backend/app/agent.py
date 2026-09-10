@@ -49,10 +49,16 @@ while true; do
   cat /proc/net/dev 2>/dev/null | awk -F'[: ]+' '/eth0|ens|enp/{rx+=$3; tx+=$11} END{printf("net_in=%.0f net_out=%.0f\n", rx, tx)}' > /tmp/hw.net
   net_in=$(sed -n 's/^net_in=//p' /tmp/hw.net)
   net_out=$(sed -n 's/^net_out=//p' /tmp/hw.net)
+  # 容器清单（docker 缺失/无权限时为空 → 不带 extra 字段）
+  # 容器名/镜像 tag 不含双引号，可安全内插 JSON
+  cons=$(docker ps -a --format '{"name":"{{.Names}}","state":"{{.State}}","status":"{{.Status}}","image":"{{.Image}}"}' 2>/dev/null | paste -sd, -)
+  body="{\"cpu\":${cpu:-0},\"mem\":${mem:-0},\"disk\":${disk:-0},\"load1\":${load1:-0},\"net_in\":${net_in:-0},\"net_out\":${net_out:-0}"
+  [ -n "$cons" ] && body="$body,\"extra\":{\"docker_containers\":[$cons]}"
+  body="$body}"
   curl -sf -m 8 -X POST "$HW_URL/api/agent/push" \
     -H "Authorization: Bearer $HW_TOKEN" \
     -H "Content-Type: application/json" \
-    -d "{\"cpu\":${cpu:-0},\"mem\":${mem:-0},\"disk\":${disk:-0},\"load1\":${load1:-0},\"net_in\":${net_in:-0},\"net_out\":${net_out:-0}}" \
+    -d "$body" \
     || echo "[agent] push failed, retrying next cycle" >&2
   sleep "${HW_INTERVAL:-60}"
 done

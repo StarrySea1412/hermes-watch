@@ -295,6 +295,22 @@ export default function Settings() {
             </div>
           </div>
 
+          {/* 诊断触发报告（Aurora Actions 式留档）：crit 诊断完成自动生成一份诊断时点报告 */}
+          <div className="card p-5 flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <h3 className="font-semibold text-[14.5px] text-[var(--text-hi)]">{t('st.diagrep.title')}</h3>
+              <p className="text-[12px] text-[var(--text-faint)] mt-1.5 leading-relaxed">
+                {t('st.diagrep.desc')}
+              </p>
+            </div>
+            <button onClick={() => saveSetting('report_on_diag', (settings.report_on_diag === 'on') ? '' : 'on')}
+              className="btn shrink-0" style={(settings.report_on_diag === 'on')
+                ? { background: 'var(--ok-bg)', color: 'var(--ok)', borderColor: 'var(--ok-border)' }
+                : { background: 'var(--neutral-bg)', color: 'var(--text-mute)', borderColor: 'var(--border)' }}>
+              {(settings.report_on_diag === 'on') ? t('st.state.on') : t('st.state.off')}
+            </button>
+          </div>
+
           {/* 备份与恢复（SQLite 单文件运维能力：每日自动备份，恢复暂存到重启生效） */}
           <div className="card p-5">
             <div className="flex items-start justify-between">

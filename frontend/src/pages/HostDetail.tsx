@@ -11,7 +11,7 @@ type Detail = {
   host: { id: number; name: string; hostname: string; group: string; username: string; mock: boolean }
   metrics: { ts: number; cpu: number; mem: number; disk: number; net_in: number; net_out: number; load1: number; swap?: number }[]
   findings: Finding[]
-  extras: { top_proc: string; failed_services: string[]; logins: { user: string; tty: string; ip: string; when: string }[]; cert_days_left: number | null }
+  extras: { top_proc: string; failed_services: string[]; logins: { user: string; tty: string; ip: string; when: string }[]; cert_days_left: number | null; docker_containers?: { name: string; state: string; status: string; image: string }[] }
 }
 
   const TABS = ['进程', '服务与登录', '证书', 'IO 与温度', '端口与暴露'] as const
@@ -91,6 +91,7 @@ export default function HostDetail() {
   const ex = (d.extras ?? {}) as Detail['extras']
   const logins = Array.isArray(ex.logins) ? ex.logins : []
   const failedServices = Array.isArray(ex.failed_services) ? ex.failed_services : []
+  const containers = Array.isArray(ex.docker_containers) ? ex.docker_containers : []
   const certDays = typeof ex.cert_days_left === 'number' ? ex.cert_days_left : null
   const ioRead = typeof (ex as any).disk_io_read === 'number' ? (ex as any).disk_io_read : 0
   const ioWrite = typeof (ex as any).disk_io_write === 'number' ? (ex as any).disk_io_write : 0
@@ -100,6 +101,9 @@ export default function HostDetail() {
   const chartData = d.metrics.map(m => [m.ts * 1000, m.cpu, m.mem, m.disk])
   const marks = d.findings.map(f => ({ ts: f.ts, label: f.title }))
   const isPrivate = (ip: string) => ip.startsWith('10.') || ip.startsWith('192.168.') || ip.startsWith('172.')
+  // 容器状态 → 展示色:running 健康,exited/dead 异常,created/paused/restarting 等过渡态给警告色
+  const dockerColor = (state: string) =>
+    state === 'running' ? 'var(--ok)' : (state === 'exited' || state === 'dead') ? 'var(--crit)' : 'var(--warn)'
 
   return (
     <div className="fade-in">
@@ -201,6 +205,25 @@ export default function HostDetail() {
             <div>{t('hd.failedServices')}{failedServices.length
               ? failedServices.map(s => <span key={s} className="pill mr-1.5" style={{ background: 'var(--crit-bg)', color: 'var(--crit)' }}>{s}</span>)
               : <span className="text-[var(--ok)]">{t('hd.none')}</span>}</div>
+            {/* 容器：docker ps -a 清单只读展示；非 running 容器的告警/恢复由规则引擎负责,这里仅陈列 */}
+            <div>
+              <div className="flex items-center gap-2 text-[var(--text-mute)] text-[12px]">
+                {t('hd.docker.title')}
+                <span className="pill num" style={{ background: 'var(--neutral-bg)', color: 'var(--text-faint)', fontSize: 10, padding: '1px 7px' }}>{containers.length}</span>
+              </div>
+              {containers.length ? (
+                <div className="mt-1 text-[12px]">
+                  {containers.map(c => (
+                    <div key={c.name} className="flex items-center gap-2.5 py-1.5 border-b border-[var(--border)] last:border-0">
+                      <span className="w-2 h-2 rounded-full shrink-0" style={{ background: dockerColor(c.state) }} title={c.state} />
+                      <span className="font-semibold shrink-0">{c.name}</span>
+                      <span className="mono text-[11.5px] text-[var(--text-mute)] flex-1 min-w-0 truncate" title={c.image}>{c.image}</span>
+                      <span className="text-[11.5px] text-[var(--text-faint)] shrink-0">{c.status}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : <div className="text-[var(--text-faint)] text-[12px]">{t('hd.docker.none')}</div>}
+            </div>
             <div className="text-[var(--text-mute)] text-[12px]">{t('hd.recentLogins')}</div>
             {logins.length ? (
               <div className="overflow-x-auto">
