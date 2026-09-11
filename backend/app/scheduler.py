@@ -160,8 +160,10 @@ def _resend_crit(host_name: str, open_rows: list[dict], active_types: set[str]) 
             db.execute("UPDATE findings SET last_notified=? WHERE id=?", (db.now(), r["id"]))
             _spawn(notify.send(
                 i18n.t("持续告警", "Ongoing alert"),
-                i18n.t(f"{host_name}: {r['title']}（已持续超 {minutes} 分钟未恢复）",
-                       f"{host_name}: {r['title']} (over {minutes} min without recovery)")))
+                notify.tpl("notify_tpl_ongoing",
+                           "{host}: {title}（已持续超 {minutes} 分钟未恢复）",
+                           "{host}: {title} (over {minutes} min without recovery)",
+                           host=host_name, title=r["title"], minutes=minutes)))
 
 
 async def process_findings(h: dict, latest: dict, extras: dict) -> list[dict]:
@@ -207,11 +209,13 @@ async def process_findings(h: dict, latest: dict, extras: dict) -> list[dict]:
             except Exception:
                 pass
     if crit_new and not silenced:
-        lines = [f"• {f['title']}" for _, f in crit_new]
+        listing = "\n".join(f"• {f['title']}" for _, f in crit_new)
         ok, _ = await notify.send(
             i18n.t("发现告警", "Finding alert"),
-            i18n.t(f"{h['name']}: {len(crit_new)} 条新告警\n" + "\n".join(lines),
-                   f"{h['name']}: {len(crit_new)} new alerts\n" + "\n".join(lines)))
+            notify.tpl("notify_tpl_finding",
+                       "{host}: {n} 条新告警\n{list}",
+                       "{host}: {n} new alerts\n{list}",
+                       host=h["name"], n=len(crit_new), list=listing))
         if ok:
             db.executemany("UPDATE findings SET last_notified=? WHERE id=?",
                            [(db.now(), fid) for fid, _ in crit_new])

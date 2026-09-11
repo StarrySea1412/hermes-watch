@@ -970,6 +970,23 @@ def t_tofu_manual():
         db.execute("DELETE FROM settings WHERE key='tofu_confirm'")
 
 
+def t_notify_tpl():
+    print("[notify-tpl]")
+    from app import notify
+    prev = db.query_one("SELECT value FROM settings WHERE key='notify_tpl_probe_down'")
+    db.execute("INSERT INTO settings(key,value) VALUES('notify_tpl_probe_down','[挂了] {name} @ {target} : {error}') "
+               "ON CONFLICT(key) DO UPDATE SET value=excluded.value", ())
+    check("自定义模板渲染",
+          notify.tpl("notify_tpl_probe_down", "默认ZH", "Default EN",
+                     name="web", target="web:80", error="timeout") == "[挂了] web @ web:80 : timeout")
+    db.execute("UPDATE settings SET value='[挂了] {name} {missing}' WHERE key='notify_tpl_probe_down'")
+    check("未知变量原样保留", "{missing}" in notify.tpl("notify_tpl_probe_down", "d", "e", name="web"))
+    db.execute("DELETE FROM settings WHERE key='notify_tpl_probe_down'")
+    check("空模板回落内置默认", notify.tpl("notify_tpl_probe_down", "默认ZH", "Default EN") == "默认ZH")
+    if prev:
+        db.execute("UPDATE settings SET value=? WHERE key='notify_tpl_probe_down'", (prev["value"],))
+
+
 def t_tofu():
     print("[tofu]")
     from app import ssh
@@ -1098,6 +1115,7 @@ if __name__ == "__main__":
     t_alert_aggregate()
     t_tofu()
     t_tofu_manual()
+    t_notify_tpl()
     t_ack_and_silence()
     t_rbac()
     print(f"\n{PASS} passed, {FAIL} failed")

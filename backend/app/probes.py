@@ -310,23 +310,34 @@ async def handle_result(p: dict, ok: bool, latency: float | None, error: str) ->
 
 
 async def _emit_flip(p: dict, flip: str, error: str) -> None:
-    """翻转出口（handle_result 与 push_miss 共用）：事件落库 + 通知外发 + last_flip_ts。"""
+    """翻转出口（handle_result 与 push_miss 共用）：事件落库 + 通知外发 + last_flip_ts。
+
+    事件/时间线文案走内置双语（tr_probe_message 读出口兜底）；外呼文本走可自定义模板
+    （notify_tpl_probe_down / notify_tpl_probe_up，空 = 与事件同文案）。"""
     name, target = p["name"], p["target"]
     if flip == "down":
         msg = i18n.t(f"拨测下线: {name}（{target}）— {error}" if error
                      else f"拨测下线: {name}（{target}）",
                      f"Probe down: {name} ({target})" + (f" — {error}" if error else ""))
         kind_word = i18n.t("拨测告警", "Probe alert")
+        text = notify.tpl("notify_tpl_probe_down",
+                          "拨测下线: {name}（{target}）— {error}",
+                          "Probe down: {name} ({target}) — {error}",
+                          name=name, target=target, error=error)
     else:
         dur = _fmt_dur(db.now() - (p["last_flip_ts"] or p["created_at"] or db.now()))
         msg = i18n.t(f"拨测恢复: {name}（{target}，持续 {dur}）",
                      f"Probe recovered: {name} ({target}, was down for {dur})")
         kind_word = i18n.t("拨测恢复", "Probe recovered")
+        text = notify.tpl("notify_tpl_probe_up",
+                          "拨测恢复: {name}（{target}，持续 {dur}）",
+                          "Probe recovered: {name} ({target}, was down for {dur})",
+                          name=name, target=target, dur=dur)
     if _notify_broadcast:
         await _notify_broadcast("probe", msg, {"probe_id": p["id"]})
     db.execute("INSERT INTO events(ts,host_id,kind,message,data) VALUES(?,?,?,?,?)",
                (db.now(), None, "probe", msg, db.j({"probe_id": p["id"]})))
-    await notify.send(kind_word, msg)
+    await notify.send(kind_word, text)
     db.execute("UPDATE probes SET last_flip_ts=? WHERE id=?", (db.now(), p["id"]))
 
 

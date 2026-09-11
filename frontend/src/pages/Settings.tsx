@@ -11,6 +11,14 @@ type TFn = (key: string, vars?: Record<string, string | number>) => string
 // 备份条目（GET /api/backups，后端按文件名倒序）
 type Backup = { name: string; size: number; ts: number }
 
+// 通知模板（后端 notify.tpl 渲染 {var} 占位；输入留空 = 内置默认文案）
+const NOTIFY_TPLS: { key: string; label: string; vars: string; ph: string }[] = [
+  { key: 'notify_tpl_finding', label: 'st.tpl.finding', vars: '{host} {n} {list}', ph: '{host}: {n} 条新告警' },
+  { key: 'notify_tpl_ongoing', label: 'st.tpl.ongoing', vars: '{host} {title} {minutes}', ph: '{host}: {title}（已持续超 {minutes} 分钟）' },
+  { key: 'notify_tpl_probe_down', label: 'st.tpl.probeDown', vars: '{name} {target} {error}', ph: '拨测下线: {name}（{target}）— {error}' },
+  { key: 'notify_tpl_probe_up', label: 'st.tpl.probeUp', vars: '{name} {target} {dur}', ph: '拨测恢复: {name}（{target}，持续 {dur}）' },
+]
+
 // 字节数 → 人类可读（备份文件通常 KB~MB 级，B 仅兜底）
 const fmtSize = (n: number) =>
   n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : n >= 1024 ? `${Math.round(n / 1024)} KB` : `${n} B`
@@ -571,6 +579,27 @@ export default function Settings() {
               </div>
             </div>
           )}
+        </div>
+
+        <div className="card p-5">
+          <div className="flex items-center gap-2.5 mb-1.5">
+            <h3 className="font-semibold text-[14.5px] text-[var(--text-hi)]">{t('st.tpl.title')}</h3>
+          </div>
+          <p className="text-[12px] text-[var(--text-faint)] mb-3">{t('st.tpl.desc')}</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {NOTIFY_TPLS.map(x => (
+              <div key={x.key}>
+                <div className="flex items-center justify-between text-[11px] text-[var(--text-faint)] mb-1">
+                  <span>{t(x.label)}</span>
+                  <span className="mono">{x.vars}</span>
+                </div>
+                <input className="input mono text-[12px]" value={settings[x.key] ?? ''}
+                  placeholder={x.ph}
+                  onChange={e => setSettings({ ...settings, [x.key]: e.target.value })}
+                  onBlur={() => saveSetting(x.key, settings[x.key] ?? '')} />
+              </div>
+            ))}
+          </div>
         </div>
 
         <div className="card p-5">

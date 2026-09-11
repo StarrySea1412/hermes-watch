@@ -12,7 +12,7 @@ SMTP 用 Shoutrrr 式单字段打包进 webhook_url（与拨测 URL 同一输入
 import datetime
 import httpx
 
-from . import db
+from . import db, i18n
 
 LABELS = {
     "wecom": "企业微信",
@@ -26,6 +26,25 @@ LABELS = {
     "ntfy": "ntfy",
     "smtp": "Email (SMTP)",
 }
+
+# 通知模板（settings 键 → 说明），tpl() 渲染 {var} 占位符；空 = 内置双语默认文案
+TPL_KEYS = {
+    "notify_tpl_finding": "发现告警（crit 聚合）：{host} {n} {list}",
+    "notify_tpl_ongoing": "持续告警：{host} {title} {minutes}",
+    "notify_tpl_probe_down": "拨测下线：{name} {target} {error}",
+    "notify_tpl_probe_up": "拨测恢复：{name} {target} {dur}",
+}
+
+
+def tpl(key: str, zh: str, en: str, **vars) -> str:
+    """自定义通知模板：settings[key] 非空则按其渲染（{var} 占位替换），否则内置双语默认。
+
+    变量替换为纯字符串替换；模板里写了未提供的变量则原样保留 {var}（便于发现配错）。"""
+    raw = (db.query_one("SELECT value FROM settings WHERE key=?", (key,)) or {}).get("value") or ""
+    text = raw.strip() or i18n.t(zh, en)
+    for k, v in vars.items():
+        text = text.replace("{" + k + "}", str(v))
+    return text
 
 
 def conf() -> dict:
