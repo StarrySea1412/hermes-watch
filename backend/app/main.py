@@ -46,7 +46,8 @@ AUTH_OPEN = ("/api/auth/status", "/api/auth/login",
 @app.middleware("http")
 async def panel_auth_middleware(request: Request, call_next):
     path = request.url.path
-    if auth.enabled() and path.startswith("/api") and path not in AUTH_OPEN:
+    if auth.enabled() and path.startswith("/api") and path not in AUTH_OPEN \
+            and not path.startswith("/api/push/"):
         role = auth.session_role(request.cookies.get(auth.COOKIE, ""))
         if not role:
             return JSONResponse({"detail": i18n.t("面板未登录", "Panel not signed in")}, status_code=401)
@@ -403,8 +404,8 @@ def notify_log(limit: int = 30):
 
 class ProbeIn(BaseModel):
     name: str
-    kind: str = "url"          # url | tcp
-    target: str
+    kind: str = "url"          # url | tcp | dns | push
+    target: str                # url=完整地址 / tcp=host:port / dns=域名 / push=占位（自动生成）
     fail_threshold: int = probes.DEFAULT_FAIL_THRESHOLD
     success_threshold: int = probes.DEFAULT_SUCCESS_THRESHOLD
     timeout_s: int = 10
@@ -412,6 +413,10 @@ class ProbeIn(BaseModel):
     max_latency_ms: int = 0    # URL 条件:响应时间上限 ms（0=不查）
     cert_days_min: int = 0     # URL 条件:HTTPS 证书最低剩余天数（0=不查）
     interval_s: int = 0        # 每目标独立周期（0=用全局 probe_interval）
+    dns_resolver: str = ""     # DNS 条件:解析器 host[:port]（DNS 拨测必填）
+    dns_type: str = "A"        # DNS 条件:记录类型 A/AAAA/CNAME/TXT/MX/NS
+    dns_expected: str = ""     # DNS 条件:答案须包含（空=有答案即可）
+    push_grace_s: int = 600    # Push 条件:容忍窗口（超时未上报 → down）
 
 
 @app.get("/api/probes")
@@ -419,35 +424,67 @@ def probes_list():
     return db.query("SELECT * FROM probes ORDER BY id")
 
 
+# Push 拨测上报（Kuma push monitor 式）：外部服务 GET/POST ?status=up|down&msg=…；
+# token 自鉴权，中间件已对 /api/push/ 前缀豁免会话门
+@app.get("/api/push/{token}")
+@app.post("/api/push/{token}")
+async def probe_push(token: str, status: str = "up", msg: str = ""):
+    pid = probes.push_report(token)
+    if pid is None:
+        raise HTTPException(404, i18n.t("push token 无效", "Invalid push token"))
+    p = db.query_one("SELECT * FROM probes WHERE id=?", (pid,))
+    ok = status != "down"
+    await probes.handle_result(p, ok, None, "" if ok else (msg or "reported down"))
+    return {"ok": True}
+
+
 @app.post("/api/probes")
 async def probe_add(p: ProbeIn):
     name = p.name.strip()[:60]
     target = p.target.strip()
-    if not name or not target:
-        raise HTTPException(400, i18n.t("名称与目标不能为空", "Name and target are required"))
-    kind = p.kind if p.kind in ("url", "tcp") else "url"
+    if not name:
+        raise HTTPException(400, i18n.t("名称不能为空", "Name is required"))
+    kind = p.kind if p.kind in ("url", "tcp", "dns", "push") else "url"
+    if kind != "push" and not target:
+        raise HTTPException(400, i18n.t("目标不能为空", "Target is required"))
     if kind == "url" and not target.startswith(("http://", "https://")):
         raise HTTPException(400, i18n.t("URL 拨测目标须以 http:// 或 https:// 开头",
                                         "URL probe target must start with http:// or https://"))
     if kind == "tcp" and (":" not in target or not target.rpartition(":")[2].isdigit()):
         raise HTTPException(400, i18n.t("TCP 拨测目标格式为 主机:端口", "TCP probe target must be host:port"))
+    if kind == "dns":
+        if "/" in target or " " in target:
+            raise HTTPException(400, i18n.t("DNS 拨测目标应为待解析域名", "DNS probe target must be a hostname"))
+        if not (p.dns_resolver or "").strip():
+            raise HTTPException(400, i18n.t("DNS 拨测须指定解析器（如 223.5.5.5）",
+                                            "DNS probe requires a resolver (e.g. 223.5.5.5)"))
     if db.query_one("SELECT id FROM probes WHERE name=?", (name,)):
         raise HTTPException(400, i18n.t(f"同名拨测已存在: {name}", f"A probe named {name} already exists"))
     if kind == "tcp" and (p.keyword or p.max_latency_ms or p.cert_days_min):
         raise HTTPException(400, i18n.t("条件引擎仅适用于 URL 拨测",
                                         "Conditions apply to URL probes only"))
+    if kind == "dns" and ((p.dns_type or "A").upper() not in probes.QTYPES):
+        raise HTTPException(400, i18n.t("DNS 记录类型不支持", "DNS record type not supported"))
     if p.interval_s and p.interval_s < 15:
         raise HTTPException(400, i18n.t("独立周期不能低于 15 秒", "Per-probe interval must be ≥ 15s"))
+    if p.push_grace_s and p.push_grace_s < 30:
+        raise HTTPException(400, i18n.t("Push 容忍窗口不能低于 30 秒", "Push grace window must be ≥ 30s"))
+    # push 型 target 仅作占位展示；上报凭据为独立 push_token（Kuma push monitor 式）
+    target = "push" if kind == "push" else target
+    push_token = agent.new_token() if kind == "push" else ""
     pid = db.execute(
         "INSERT INTO probes(name,kind,target,fail_threshold,success_threshold,timeout_s,"
-        "keyword,max_latency_ms,cert_days_min,interval_s,up,fail_streak,succ_streak,created_at) "
-        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "keyword,max_latency_ms,cert_days_min,interval_s,dns_resolver,dns_type,dns_expected,"
+        "push_token,push_grace_s,up,fail_streak,succ_streak,created_at) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (name, kind, target, max(1, p.fail_threshold), max(1, p.success_threshold),
          max(1, p.timeout_s), (p.keyword or "").strip()[:200], max(0, p.max_latency_ms),
-         max(0, p.cert_days_min), max(0, p.interval_s), 1, 0, 0, db.now()))
+         max(0, p.cert_days_min), max(0, p.interval_s), (p.dns_resolver or "").strip()[:120],
+         (p.dns_type or "A").upper(), (p.dns_expected or "").strip()[:200],
+         push_token, max(30, p.push_grace_s or 600), 1, 0, 0, db.now()))
     await broadcast("probe", i18n.t(f"新增拨测: {name} → {target}", f"Probe added: {name} → {target}"),
                     {"probe_id": pid})
-    return {"id": pid}
+    return {"id": pid, "push_token": push_token}
 
 
 @app.delete("/api/probes/{pid}")

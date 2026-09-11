@@ -9,10 +9,12 @@ import { Ic } from '../icons'
 // success_threshold 次成功 → up。防抖窗口内显示「观察中 / 恢复中 x/N」徽标。
 
 type Probe = {
-  id: number; name: string; kind: 'url' | 'tcp'; target: string
+  id: number; name: string; kind: 'url' | 'tcp' | 'dns' | 'push'; target: string
   up: 0 | 1; fail_streak: number; succ_streak: number
   fail_threshold: number; success_threshold: number; timeout_s: number
   keyword: string; max_latency_ms: number; cert_days_min: number; interval_s: number
+  dns_resolver?: string; dns_type?: string; dns_expected?: string
+  push_token?: string; push_grace_s?: number
   last_ts: number | null; last_latency: number | null; last_error: string | null
   last_flip_ts: number | null; created_at: number | null
 }
@@ -21,9 +23,10 @@ type ProbeLog = { id: number; probe_id: number; ts: number; up: 0 | 1; latency: 
 const EMPTY_LOGS: ProbeLog[] = []
 
 /** 单条拨测卡：状态 pill + 延迟 + 48 桶心跳条带（视觉对齐 HostDetail 巡检心跳） */
-function ProbeCard({ p, logs, running, badgeToken, onRun, onAskDelete, onCopyBadge }: {
+function ProbeCard({ p, logs, running, badgeToken, onRun, onAskDelete, onCopyBadge, onCopyPush }: {
   p: Probe; logs: ProbeLog[]; running: boolean; badgeToken: string
-  onRun: (p: Probe) => void; onAskDelete: (p: Probe) => void; onCopyBadge: (p: Probe) => void
+  onRun: (p: Probe) => void; onAskDelete: (p: Probe) => void
+  onCopyBadge: (p: Probe) => void; onCopyPush: (p: Probe) => void
 }) {
   const { t } = useT()
   const ok = p.up === 1
@@ -54,10 +57,13 @@ function ProbeCard({ p, logs, running, badgeToken, onRun, onAskDelete, onCopyBad
           <div className="font-semibold text-[14.5px] text-[var(--text-hi)] flex items-center gap-2">
             {p.name}
             <span className="pill" style={{ background: 'var(--accent-dim)', color: 'var(--accent)', fontSize: 10, padding: '1px 7px' }}>
-              {p.kind === 'tcp' ? 'TCP' : 'URL'}
+              {p.kind.toUpperCase()}
             </span>
           </div>
-          <div className="text-[11.5px] text-[var(--text-faint)] mt-0.5 mono truncate" title={p.target}>{p.target}</div>
+          <div className="text-[11.5px] text-[var(--text-faint)] mt-0.5 mono truncate"
+            title={p.kind === 'dns' ? `${p.target} · ${p.dns_type} @ ${p.dns_resolver}` : p.target}>
+            {p.kind === 'dns' ? `${p.target} · ${p.dns_type} @ ${p.dns_resolver}` : p.target}
+          </div>
         </div>
         <span className="pill shrink-0" style={{ background: ok ? 'var(--ok-bg)' : 'var(--crit-bg)', color, border: `1px solid ${ok ? 'var(--ok-border)' : 'var(--crit-border)'}` }}>
           <span className="pulse-dot" style={{ background: color }} />
@@ -108,6 +114,23 @@ function ProbeCard({ p, logs, running, badgeToken, onRun, onAskDelete, onCopyBad
         <div className="text-[11px] mt-2 text-[var(--crit)] mono truncate" title={p.last_error}>{t('pr.errLast', { err: p.last_error })}</div>
       )}
 
+      {/* Push 型：上报地址 + 容忍窗口提示（cron/CI 接入用） */}
+      {p.kind === 'push' && p.push_token && (
+        <div className="mt-2.5 text-[11px]">
+          <div className="flex items-center gap-1.5 text-[var(--text-faint)] mb-1">
+            {t('pr.pushUrl')}
+            <button className="ml-auto text-[var(--accent)] hover:underline" onClick={() => onCopyPush(p)}>
+              <Ic name="copy" size={12} />
+            </button>
+          </div>
+          <div className="inset px-2 py-1.5 mono text-[10.5px] text-[var(--text-mute)] truncate"
+            title={`${location.origin}/api/push/${p.push_token}`}>
+            {location.origin}/api/push/{p.push_token}
+          </div>
+          <div className="text-[10.5px] text-[var(--text-faint)] mt-1">{t('pr.pushTarget', { n: p.push_grace_s ?? 600 })}</div>
+        </div>
+      )}
+
       <div className="mt-auto pt-2.5 flex items-center gap-2 text-[11px] text-[var(--text-faint)] flex-wrap">
         <span>{p.last_ts ? t('pr.lastCheck', { time: fmtTime(p.last_ts).slice(-8) }) : t('pr.waitingFirst')}</span>
         <span>·</span>
@@ -141,11 +164,12 @@ export default function Probes() {
   const [logs, setLogs] = useState<Record<number, ProbeLog[]>>({})
   const [loadErr, setLoadErr] = useState('')
   const [msg, setMsg] = useState('')
-  const [form, setForm] = useState({ name: '', kind: 'url' as 'url' | 'tcp', target: '' })
+  const [form, setForm] = useState({ name: '', kind: 'url' as 'url' | 'tcp' | 'dns' | 'push', target: '' })
   const [advOpen, setAdvOpen] = useState(false)
   const [adv, setAdv] = useState({
     fail_threshold: '3', success_threshold: '2', timeout_s: '10',
     keyword: '', max_latency_ms: '', cert_days_min: '', interval_s: '',
+    dns_resolver: '', dns_type: 'A', dns_expected: '', push_grace_s: '600',
   })
   const [adding, setAdding] = useState(false)
   const [runningId, setRunningId] = useState<number | null>(null)
@@ -204,7 +228,8 @@ export default function Probes() {
 
   const add = () => {
     setAdding(true)
-    const payload: Record<string, unknown> = { name: form.name, kind: form.kind, target: form.target }
+    const payload: Record<string, unknown> = { name: form.name, kind: form.kind }
+    if (form.kind !== 'push') payload.target = form.target
     if (adv.fail_threshold !== '') payload.fail_threshold = Number(adv.fail_threshold)
     if (adv.success_threshold !== '') payload.success_threshold = Number(adv.success_threshold)
     if (adv.timeout_s !== '') payload.timeout_s = Number(adv.timeout_s)
@@ -213,6 +238,13 @@ export default function Probes() {
     if (form.kind === 'url' && adv.max_latency_ms !== '') payload.max_latency_ms = Number(adv.max_latency_ms)
     if (form.kind === 'url' && adv.cert_days_min !== '') payload.cert_days_min = Number(adv.cert_days_min)
     if (adv.interval_s !== '') payload.interval_s = Number(adv.interval_s)
+    // DNS 三件套与 Push 容忍窗口随各自 kind 提交
+    if (form.kind === 'dns') {
+      payload.dns_resolver = adv.dns_resolver.trim()
+      payload.dns_type = adv.dns_type
+      payload.dns_expected = adv.dns_expected.trim()
+    }
+    if (form.kind === 'push' && adv.push_grace_s !== '') payload.push_grace_s = Number(adv.push_grace_s)
     api<{ id: number }>('/probes', { method: 'POST', body: JSON.stringify(payload) })
       .then(() => {
         flash(t('pr.added', { n: form.name }))
@@ -256,6 +288,11 @@ export default function Probes() {
   const copyBadge = async (p?: Probe) => {
     const url = `${location.origin}/badge/${badgeToken}${p ? `/${p.id}` : ''}.svg`
     try { await navigator.clipboard.writeText(url); flash(t('pr.badgeCopied')) } catch { /* noop */ }
+  }
+
+  // 复制 push 型上报地址（cron/CI 接入；token 随目标删除失效）
+  const copyPush = async (p: Probe) => {
+    try { await navigator.clipboard.writeText(`${location.origin}/api/push/${p.push_token}`); flash(t('pr.pushCopied')) } catch { /* noop */ }
   }
 
   return (
@@ -308,26 +345,63 @@ export default function Probes() {
           </div>
           <div>
             <div className="text-[11px] text-[var(--text-faint)] mb-1.5">{t('pr.kind')}</div>
-            <div className="flex gap-1.5">
-              {(['url', 'tcp'] as const).map(k => (
+            <div className="flex gap-1.5 flex-wrap">
+              {(['url', 'tcp', 'dns', 'push'] as const).map(k => (
                 <button key={k} onClick={() => setForm({ ...form, kind: k })}
                   className={`pill ${form.kind === k ? '' : 'text-[var(--text-mute)]'}`}
                   style={form.kind === k ? { background: 'var(--accent-dim)', color: 'var(--accent)' } : { background: 'var(--neutral-bg)' }}>
-                  {k === 'url' ? 'URL' : 'TCP'}
+                  {k.toUpperCase()}
                 </button>
               ))}
             </div>
           </div>
           <div>
             <div className="text-[11px] text-[var(--text-faint)] mb-1.5">{t('pr.target')}</div>
-            <input className="input mono" value={form.target}
-              placeholder={form.kind === 'url' ? t('pr.phTargetUrl') : t('pr.phTargetTcp')}
+            <input className="input mono" value={form.target} disabled={form.kind === 'push'}
+              placeholder={form.kind === 'url' ? t('pr.phTargetUrl')
+                : form.kind === 'tcp' ? t('pr.phTargetTcp')
+                  : form.kind === 'dns' ? t('pr.phTargetDns') : '—'}
               onChange={e => setForm({ ...form, target: e.target.value })} />
           </div>
-          <button className="btn btn-primary justify-center" disabled={adding || !form.name.trim() || !form.target.trim()} onClick={add}>
+          <button className="btn btn-primary justify-center" disabled={adding || !form.name.trim() || (form.kind !== 'push' && !form.target.trim())} onClick={add}>
             <Ic name="plus" size={13} /> {t('pr.add')}
           </button>
         </div>
+        {/* DNS / Push 专属字段：DNS=解析器+记录类型+期望包含；Push=容忍窗口（其余条件不适用） */}
+        {(form.kind === 'dns' || form.kind === 'push') && (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-2.5">
+            {form.kind === 'dns' ? (
+              <>
+                <div>
+                  <div className="text-[11px] text-[var(--text-faint)] mb-1">{t('pr.dnsResolver')}</div>
+                  <input className="input mono" placeholder="223.5.5.5" value={adv.dns_resolver}
+                    onChange={e => setAdv({ ...adv, dns_resolver: e.target.value })} />
+                </div>
+                <div>
+                  <div className="text-[11px] text-[var(--text-faint)] mb-1">{t('pr.dnsType')}</div>
+                  <select className="input" value={adv.dns_type}
+                    onChange={e => setAdv({ ...adv, dns_type: e.target.value })}>
+                    {['A', 'AAAA', 'CNAME', 'TXT', 'MX', 'NS'].map(x => <option key={x} value={x}>{x}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <div className="text-[11px] text-[var(--text-faint)] mb-1">{t('pr.dnsExpected')}</div>
+                  <input className="input mono" placeholder={t('pr.dnsExpectedPh')} value={adv.dns_expected}
+                    onChange={e => setAdv({ ...adv, dns_expected: e.target.value })} />
+                </div>
+              </>
+            ) : (
+              <div>
+                <div className="flex justify-between text-[11px] text-[var(--text-faint)] mb-1">
+                  <span>{t('pr.pushGrace')}</span><span>{t('st.thresh.def', { n: 600 })}</span>
+                </div>
+                <input className="input num" inputMode="numeric" placeholder="600" value={adv.push_grace_s}
+                  onChange={e => setAdv({ ...adv, push_grace_s: e.target.value })} />
+                <div className="text-[10.5px] text-[var(--text-faint)] mt-1">{t('pr.pushHint')}</div>
+              </div>
+            )}
+          </div>
+        )}
         {/* 高级折叠：双阈值 + 超时（acc-body 手风琴，高度自适应） */}
         <div className="mt-3">
           <button className="text-[11.5px] text-[var(--text-faint)] hover:text-[var(--accent)] flex items-center gap-1"
@@ -416,7 +490,7 @@ export default function Probes() {
           {probes.map((p, i) => (
             <div key={p.id} className="rise-in h-full" style={{ animationDelay: `${Math.min(i, 6) * 45}ms` }}>
               <ProbeCard p={p} logs={logs[p.id] ?? EMPTY_LOGS} running={runningId === p.id}
-                badgeToken={badgeToken} onCopyBadge={copyBadge}
+                badgeToken={badgeToken} onCopyBadge={copyBadge} onCopyPush={copyPush}
                 onRun={runNow} onAskDelete={setDelTarget} />
             </div>
           ))}

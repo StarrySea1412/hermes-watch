@@ -75,6 +75,11 @@ CREATE TABLE IF NOT EXISTS probes(
   max_latency_ms INTEGER DEFAULT 0,   -- URL 条件:响应时间上限 ms（0=不查）
   cert_days_min INTEGER DEFAULT 0,    -- URL 条件:HTTPS 证书最低剩余天数（0=不查）
   interval_s INTEGER DEFAULT 0,       -- 每目标独立周期（0=用全局 probe_interval）
+  dns_resolver TEXT DEFAULT '',       -- DNS 条件:解析器 host[:port]（DNS 拨测必填）
+  dns_type TEXT DEFAULT 'A',          -- DNS 条件:记录类型 A/AAAA/CNAME/TXT/MX/NS
+  dns_expected TEXT DEFAULT '',       -- DNS 条件:答案须包含（空=有答案即可）
+  push_token TEXT DEFAULT '',         -- Push 拨测:上报 token（/api/push/{token}）
+  push_grace_s INTEGER DEFAULT 600,   -- Push 拨测:容忍窗口，超时未上报 → down
   last_ts REAL, last_latency REAL, last_error TEXT DEFAULT '',
   last_flip_ts REAL, created_at REAL
 );
@@ -123,6 +128,12 @@ MIGRATIONS = [
     "ALTER TABLE metrics ADD COLUMN temp_c REAL DEFAULT 0",
     # swap 使用率（%，agent/SSH 探针双来源），0=无 swap 或未上报
     "ALTER TABLE metrics ADD COLUMN swap REAL DEFAULT 0",
+    # DNS / Push 拨测（对标 Kuma 的 DNS monitor 与 push monitor）
+    "ALTER TABLE probes ADD COLUMN dns_resolver TEXT DEFAULT ''",
+    "ALTER TABLE probes ADD COLUMN dns_type TEXT DEFAULT 'A'",
+    "ALTER TABLE probes ADD COLUMN dns_expected TEXT DEFAULT ''",
+    "ALTER TABLE probes ADD COLUMN push_token TEXT DEFAULT ''",
+    "ALTER TABLE probes ADD COLUMN push_grace_s INTEGER DEFAULT 600",
 ]
 
 SCHEMA_EXTRA = """

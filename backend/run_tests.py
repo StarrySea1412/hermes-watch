@@ -511,6 +511,64 @@ def t_probes():
         db.execute("DELETE FROM settings WHERE key='hw_lang'")
 
 
+def t_probe_dns_push():
+    print("[probe-dns-push]")
+    from app import probes
+    # DNS 线格式：QNAME 编码 + QTYPE
+    q = probes._build_query("example.com", 1, 0x426)
+    check("DNS 查询报文含 QNAME+QTYPE", b"\x07example\x03com\x00" + (1).to_bytes(2, "big") in q)
+    # 应答解析（手工拼报文：压缩指针 c0 0c 指回 Question 名，A 记录 93.184.216.34）
+    header = (0x426).to_bytes(2, "big") + b"\x81\x80" + \
+        (1).to_bytes(2, "big") + (1).to_bytes(2, "big") + b"\x00\x00\x00\x00"
+    question = b"\x07example\x03com\x00" + (1).to_bytes(2, "big") + b"\x00\x01"
+    answer = b"\xc0\x0c" + (1).to_bytes(2, "big") + b"\x00\x01" + b"\x00\x00\x00\x3c" + \
+        (4).to_bytes(2, "big") + bytes([93, 184, 216, 34])
+    answers = probes._parse_response(header + question + answer, 0x426)
+    check("A 应答解析出 93.184.216.34", answers == ["93.184.216.34"])
+    try:
+        probes._parse_response(header[:10], 0x426)
+        check("畸形应答报错", False)
+    except ValueError:
+        check("畸形应答报错", True)
+    check("dns_check: 无记录失败", probes.dns_check([], "") == (False, "no records"))
+    ok, err = probes.dns_check(["1.2.3.4"], "2.3.4")
+    check("dns_check: 期望子串命中", ok and err == "")
+    ok2, err2 = probes.dns_check(["1.2.3.4"], "9.9.9.9")
+    check("dns_check: 期望未命中给原因", not ok2 and "9.9.9.9" in err2)
+    name, used = probes._parse_name(b"\x03www\xc0\x0c", 0)
+    check("压缩指针解析名称", name == "www" and used == 6)
+
+    # Push 拨测：token 定位 + 上报维持 up + 超窗 sweep 翻 down
+    db.execute("DELETE FROM probes WHERE name LIKE '__t_push%'")
+    pid = db.execute(
+        "INSERT INTO probes(name,kind,target,push_token,push_grace_s,created_at) "
+        "VALUES('__t_push__','push','push','__t_ptok__',600,?)", (db.now(),))
+    check("push token 定位", probes.push_report("__t_ptok__") == pid)
+    check("无效 token 返回 None", probes.push_report("nope") is None)
+    p = db.query_one("SELECT * FROM probes WHERE id=?", (pid,))
+    asyncio.run(probes.handle_result(p, True, None, ""))
+    p = db.query_one("SELECT * FROM probes WHERE id=?", (pid,))
+    check("push 上报维持 up 且 last_ts 刷新", p["up"] == 1 and p["last_ts"] is not None)
+    db.execute("UPDATE probes SET last_ts=? WHERE id=?", (db.now() - 700, pid))  # 超过 600s 容忍窗
+    swept = asyncio.run(probes.sweep_push())
+    p = db.query_one("SELECT * FROM probes WHERE id=?", (pid,))
+    ev = db.query_one("SELECT message FROM events WHERE kind='probe' ORDER BY id DESC LIMIT 1")
+    log = db.query_one("SELECT * FROM probe_log WHERE probe_id=? ORDER BY id DESC LIMIT 1", (pid,))
+    check("超窗 sweep 翻 down", swept == 1 and p["up"] == 0)
+    check("超窗事件与心跳留痕", ev and "push" in ev["message"] and log and log["up"] == 0)
+    check("容忍窗口内不误杀", asyncio.run(probes.sweep_push()) == 0)  # 已 down，不再 sweep
+    # 恢复：success_threshold 默认 2 次成功 → up
+    p = db.query_one("SELECT * FROM probes WHERE id=?", (pid,))
+    asyncio.run(probes.handle_result(p, True, None, ""))
+    p = db.query_one("SELECT * FROM probes WHERE id=?", (pid,))
+    asyncio.run(probes.handle_result(p, True, None, ""))
+    p = db.query_one("SELECT * FROM probes WHERE id=?", (pid,))
+    check("push 连续 2 次上报恢复 up", p["up"] == 1)
+    db.execute("DELETE FROM probes WHERE id=?", (pid,))
+    db.execute("DELETE FROM probe_log WHERE probe_id=?", (pid,))
+    db.execute("DELETE FROM events WHERE kind='probe' AND message LIKE '%__t_push__%'")
+
+
 def t_badge():
     print("[badge]")
     from app import badge as badge_mod
@@ -668,6 +726,7 @@ if __name__ == "__main__":
     t_notify_log()
     t_backups()
     t_probes()
+    t_probe_dns_push()
     t_badge()
     t_tofu()
     t_ack_and_silence()
