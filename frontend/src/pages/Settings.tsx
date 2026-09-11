@@ -158,6 +158,10 @@ export default function Settings() {
   const execOn = settings.propose_exec === 'on'
   const authOn = settings.panel_auth === 'on'
   const autoReportOn = (settings.auto_report_min ?? '0') !== '0'
+  // SSH 指纹人工确认（tofu_confirm）：未确认与待采纳新指纹的主机清单
+  const tofuOn = settings.tofu_confirm === 'on'
+  const untrustedHosts = hosts.filter(h => h.host_key_fp && h.trusted === false)
+  const pendingHosts = hosts.filter(h => h.host_key_pending)
 
   const fetchModels = async () => {
     setFetching(true); setModelsMsg(''); setModels([])
@@ -726,6 +730,61 @@ export default function Settings() {
             )}
             {authMsg && <div className="text-[12px] mt-2.5 text-[var(--text-mute)]">{authMsg}</div>}
           </div>
+
+          {/* SSH 指纹人工确认（tofu_confirm=on）：首次指纹/变更候选需面板确认后才放行采集 */}
+          {authRole !== 'observer' && (
+            <div className="card p-5 lg:col-span-2">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <h3 className="font-semibold text-[14.5px] text-[var(--text-hi)]">{t('st.tofu.title')}</h3>
+                  <p className="text-[12px] text-[var(--text-faint)] mt-1.5 leading-relaxed">{t('st.tofu.desc')}</p>
+                </div>
+                <button className="btn shrink-0" onClick={() => saveSetting('tofu_confirm', tofuOn ? '' : 'on')}
+                  style={tofuOn ? { background: 'var(--ok-bg)', color: 'var(--ok)', borderColor: 'var(--ok-border)' }
+                    : { background: 'var(--neutral-bg)', color: 'var(--text-mute)', borderColor: 'var(--border)' }}>
+                  {tofuOn ? t('st.state.on') : t('st.state.off')}
+                </button>
+              </div>
+              {(untrustedHosts.length || pendingHosts.length) ? (
+                <div className="mt-3 space-y-2">
+                  {untrustedHosts.map(h => (
+                    <div key={h.id} className="inset px-3 py-2 flex items-center gap-2.5 text-[12px] flex-wrap">
+                      <span className="font-semibold text-[var(--text-hi)]">{h.name}</span>
+                      <span className="mono text-[10.5px] text-[var(--text-faint)] truncate flex-1 min-w-0" title={h.host_key_fp}>{h.host_key_fp}</span>
+                      <button className="btn btn-ok shrink-0" style={{ padding: '3px 10px', fontSize: 11 }}
+                        onClick={() => api(`/hosts/${h.id}/trust`, { method: 'POST', body: JSON.stringify({ action: 'confirm' }) }).then(load)
+                          .catch(e => setMsg(`✕ ${e.message}`))}>
+                        {t('st.tofu.trust')}
+                      </button>
+                    </div>
+                  ))}
+                  {pendingHosts.map(h => (
+                    <div key={h.id} className="inset px-3 py-2 text-[12px] space-y-1.5">
+                      <div className="flex items-center gap-2.5">
+                        <span className="font-semibold text-[var(--crit)]">{t('st.tofu.changed')}</span>
+                        <span className="font-semibold text-[var(--text-hi)]">{h.name}</span>
+                        <span className="mono text-[10.5px] text-[var(--text-faint)] truncate flex-1 min-w-0">{h.hostname}</span>
+                      </div>
+                      <div className="mono text-[10.5px] text-[var(--text-faint)] truncate">{t('st.tofu.oldFp')} {h.host_key_fp}</div>
+                      <div className="mono text-[10.5px] text-[var(--warn)] truncate">{t('st.tofu.newFp')} {h.host_key_pending}</div>
+                      <div className="flex gap-2">
+                        <button className="btn btn-primary" style={{ padding: '3px 10px', fontSize: 11 }}
+                          onClick={() => api(`/hosts/${h.id}/trust`, { method: 'POST', body: JSON.stringify({ action: 'adopt' }) }).then(load)
+                            .catch(e => setMsg(`✕ ${e.message}`))}>
+                          {t('st.tofu.adopt')}</button>
+                        <button className="btn btn-ghost" style={{ padding: '3px 10px', fontSize: 11 }}
+                          onClick={() => api(`/hosts/${h.id}/trust`, { method: 'POST', body: JSON.stringify({ action: 'reject' }) }).then(load)
+                            .catch(e => setMsg(`✕ ${e.message}`))}>
+                          {t('st.tofu.reject')}</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-[12px] text-[var(--text-faint)] mt-3">{t('st.tofu.none')}</div>
+              )}
+            </div>
+          )}
 
           {/* 用户管理（admin）：多用户 + 角色分发 */}
           {authOn && authRole === 'admin' && (

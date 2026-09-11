@@ -917,6 +917,59 @@ def t_alert_aggregate():
         db.execute("DELETE FROM hosts WHERE id=?", (hid,))
 
 
+def t_tofu_manual():
+    print("[tofu-manual]")
+    from app import ssh
+    prev = db.query_one("SELECT value FROM settings WHERE key='tofu_confirm'")
+    db.execute("INSERT INTO settings(key,value) VALUES('tofu_confirm','on') "
+               "ON CONFLICT(key) DO UPDATE SET value=excluded.value", ())
+    hid = db.execute(
+        "INSERT INTO hosts(name,hostname,group_name,mock,created_at,host_key_fp) "
+        "VALUES('__t_tofum__','x','t',0,?, '')", (db.now(),))
+
+    class K:
+        def __init__(self, tag):
+            self.tag = tag
+
+        def get_fingerprint(self, algo="sha256"):
+            return f"SHA256:{self.tag}"
+
+    cl = ssh._TofuClient(dict(db.query_one("SELECT * FROM hosts WHERE id=?", (hid,))))
+    # ① 人工确认模式：首次连接记录指纹但拒绝
+    try:
+        cl.validate_host_public_key("x", "ip", 22, K("AAA"))
+        check("首次连接被拒", False)
+    except ssh.SSHUntrusted:
+        check("首次连接被拒", True)
+    row = dict(db.query_one("SELECT * FROM hosts WHERE id=?", (hid,)))
+    check("指纹已记录且 trusted=0", row["host_key_fp"] == "SHA256:AAA" and not row["trusted"])
+    # ② 未确认重试：持续拦截
+    cl2 = ssh._TofuClient(row)
+    try:
+        cl2.validate_host_public_key("x", "ip", 22, K("AAA"))
+        check("未确认持续拦截", False)
+    except ssh.SSHUntrusted:
+        check("未确认持续拦截", True)
+    # ③ 面板确认后放行
+    db.execute("UPDATE hosts SET trusted=1 WHERE id=?", (hid,))
+    cl3 = ssh._TofuClient(dict(db.query_one("SELECT * FROM hosts WHERE id=?", (hid,))))
+    check("确认后放行", cl3.validate_host_public_key("x", "ip", 22, K("AAA")))
+    # ④ 指纹变更：新指纹入 pending 待采纳，旧指纹未动、继续拦截
+    try:
+        cl3.validate_host_public_key("x", "ip", 22, K("BBB"))
+        check("指纹变更抛 HostKeyChanged", False)
+    except ssh.HostKeyChanged:
+        check("指纹变更抛 HostKeyChanged", True)
+    row = dict(db.query_one("SELECT * FROM hosts WHERE id=?", (hid,)))
+    check("候选新指纹入 pending、旧指纹未动",
+          row["host_key_pending"] == "SHA256:BBB" and row["host_key_fp"] == "SHA256:AAA")
+    db.execute("DELETE FROM hosts WHERE id=?", (hid,))
+    if prev:
+        db.execute("UPDATE settings SET value=? WHERE key='tofu_confirm'", (prev["value"],))
+    else:
+        db.execute("DELETE FROM settings WHERE key='tofu_confirm'")
+
+
 def t_tofu():
     print("[tofu]")
     from app import ssh
@@ -1044,6 +1097,7 @@ if __name__ == "__main__":
     t_guard()
     t_alert_aggregate()
     t_tofu()
+    t_tofu_manual()
     t_ack_and_silence()
     t_rbac()
     print(f"\n{PASS} passed, {FAIL} failed")

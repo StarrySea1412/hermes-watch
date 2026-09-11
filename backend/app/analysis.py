@@ -628,6 +628,9 @@ def fleet_snapshot() -> dict:
             "open_findings": len(findings),
             "worst": worst,
             "uptime": heartbeat_uptime(h["id"], now_ts),
+            "trusted": bool(h["trusted"]),
+            "host_key_fp": h["host_key_fp"] or "",
+            "host_key_pending": h["host_key_pending"] or "",
         })
     return {"hosts": out,
             "generated_at": now_ts}

@@ -142,12 +142,15 @@ class HostIn(BaseModel):
 async def add_host(h: HostIn):
     if db.query_one("SELECT id FROM hosts WHERE name=?", (h.name,)):
         raise HTTPException(400, i18n.t("同名主机已存在", "A host with this name already exists"))
+    # TOFU 人工确认模式：新主机初始 trusted=0（首次指纹记录后仍需面板确认）
+    tofu_manual = (db.query_one("SELECT value FROM settings WHERE key='tofu_confirm'") or {}).get("value") == "on"
     hid = db.execute(
         "INSERT INTO hosts(name,hostname,port,username,secret,group_name,mock,created_at,"
-        "bastion_host,bastion_port,bastion_username,bastion_secret) VALUES(?,?,?,?,?,?,0,?,?,?,?,?)",
+        "bastion_host,bastion_port,bastion_username,bastion_secret,trusted) VALUES(?,?,?,?,?,?,0,?,?,?,?,?,?)",
         (h.name, h.hostname, h.port, h.username, secrets.encrypt(h.secret), h.group_name, db.now(),
          (h.bastion_host or "").strip(), h.bastion_port or 22, (h.bastion_username or "").strip() or "root",
-         secrets.encrypt(h.bastion_secret) if (h.bastion_secret or "").strip() else ""))
+         secrets.encrypt(h.bastion_secret) if (h.bastion_secret or "").strip() else "",
+         0 if tofu_manual else 1))
     await broadcast("host", i18n.t(f"新增主机 {h.name}", f"Host added: {h.name}"))
     return {"id": hid}
 
@@ -1160,6 +1163,33 @@ def badge_probe(token: str, probe_id: int):
     if not p:
         raise HTTPException(404, i18n.t("拨测目标不存在", "Probe not found"))
     return _badge_response(badge.probe_badge(p))
+
+
+# ---------- SSH 指纹人工确认（tofu_confirm=on 时用） ----------
+
+@app.post("/api/hosts/{hid}/trust")
+async def host_trust(hid: int, body: dict):
+    """action=confirm 信任当前已记录指纹；adopt 采纳 pending 新指纹；reject 丢弃候选。"""
+    row = db.query_one("SELECT id, host_key_fp, host_key_pending FROM hosts WHERE id=?", (hid,))
+    if not row:
+        raise HTTPException(404, i18n.t("主机不存在", "Host not found"))
+    action = (body or {}).get("action", "confirm")
+    if action == "adopt":
+        if not row["host_key_pending"]:
+            raise HTTPException(400, i18n.t("没有待采纳的候选指纹", "No candidate fingerprint pending"))
+        db.execute("UPDATE hosts SET host_key_fp=?, host_key_pending='', trusted=1 WHERE id=?",
+                   (row["host_key_pending"], hid))
+        msg = i18n.t("已采纳主机新指纹", "Adopted new host fingerprint")
+    elif action == "reject":
+        db.execute("UPDATE hosts SET host_key_pending='' WHERE id=?", (hid,))
+        msg = i18n.t("已拒绝候选指纹", "Rejected candidate fingerprint")
+    else:
+        if not row["host_key_fp"]:
+            raise HTTPException(400, i18n.t("尚未记录指纹（主机未连过）", "No fingerprint recorded yet"))
+        db.execute("UPDATE hosts SET trusted=1 WHERE id=?", (hid,))
+        msg = i18n.t("已信任主机指纹", "Host fingerprint trusted")
+    await broadcast("host", f"{msg}: {hid}")
+    return {"ok": True}
 
 
 # ---------- 公开访问审计（admin only：会话门自动套用 /api 前缀） ----------

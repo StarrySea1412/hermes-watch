@@ -10,13 +10,21 @@ import asyncio
 
 import asyncssh
 
-from . import db
+from . import db, i18n
 
 
 class HostKeyChanged(RuntimeError):
     def __init__(self, hostname: str, old: str, new: str):
         super().__init__(f"{hostname} 主机指纹已变更（原 {old[:20]}… → 新 {new[:20]}…）")
         self.old, self.new = old, new
+
+
+class SSHUntrusted(RuntimeError):
+    """tofu_confirm 开启时的拦截：指纹已记录但未经人工确认（或变更待采纳）。"""
+
+
+def _tofu_manual() -> bool:
+    return (db.query_one("SELECT value FROM settings WHERE key='tofu_confirm'") or {}).get("value") == "on"
 
 
 def _fp(key) -> str:
@@ -27,22 +35,42 @@ class _TofuClient(asyncssh.SSHClient):
     """TOFU 校验：在连接完成时比对服务器公钥指纹。
 
     指纹写入列由 _fp_col 决定：目标机写 host_key_fp，堡垒机连接写 bastion_key_fp
-    （两台设备两把钥匙，各自独立信任）。"""
+    （两台设备两把钥匙，各自独立信任）。
+    tofu_confirm=on（人工确认模式，仅作用于目标机；跳板保持自动 TOFU）：
+    - 首次连接：记录指纹、trusted=0、拒绝连接，直到面板点「确认信任」
+    - 已记录未确认（trusted=0）→ 持续拒绝
+    - 指纹变更：新指纹存 host_key_pending，旧指纹继续拦截，面板采纳后才换锁"""
 
     def __init__(self, host_row: dict):
         self._host = host_row or {}
         self._fp_col = self._host.get("_fp_col") or "host_key_fp"
 
+    def _manual(self) -> bool:
+        """人工确认模式仅作用于目标机指纹；跳板连接（_auto）保持自动 TOFU。"""
+        return self._fp_col == "host_key_fp" and not self._host.get("_auto") and _tofu_manual()
+
     def validate_host_public_key(self, host: str, addr: str, port: int, key) -> bool:
         fp = _fp(key)
         expected = self._host.get("host_key_fp") or ""
+        hid = self._host.get("id")
+        manual = self._manual()
         if not expected:  # 首次见到该主机 → 记录指纹（TOFU 信任）
-            hid = self._host.get("id")
             if hid:
+                if manual:
+                    db.execute("UPDATE hosts SET host_key_fp=?, trusted=0 WHERE id=?", (fp, hid))
+                    raise SSHUntrusted(i18n.t(
+                        "SSH 首次指纹已记录，等待面板人工确认后放行",
+                        "First-use SSH fingerprint recorded — confirm in the panel to allow"))
                 db.execute(f"UPDATE hosts SET {self._fp_col}=? WHERE id=?", (fp, hid))
             return True
         if expected != fp:
+            if hid and manual:
+                db.execute("UPDATE hosts SET host_key_pending=? WHERE id=?", (fp, hid))
             raise HostKeyChanged(self._host.get("hostname", host), expected, fp)
+        if manual and not (self._host.get("trusted") or 0):
+            raise SSHUntrusted(i18n.t(
+                "SSH 指纹已记录，等待面板人工确认后放行",
+                "SSH fingerprint recorded — confirm in the panel to allow"))
         return True
 
 
@@ -95,7 +123,8 @@ async def _bastion_get(host: dict, timeout: float, key: tuple):
             "username": host.get("bastion_username") or "root",
             "secret": host.get("bastion_secret"),
             "host_key_fp": host.get("bastion_key_fp") or "",
-            "_fp_col": "bastion_key_fp"}
+            "_fp_col": "bastion_key_fp",
+            "_auto": True}  # 跳板保持自动 TOFU；人工确认仅管目标机
     conn = await asyncio.wait_for(connect(brow), timeout)
     _bastions[key] = conn
     asyncio.create_task(_bastion_reaper(key, conn))

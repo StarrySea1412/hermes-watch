@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS hosts(
   bastion_username TEXT DEFAULT '',
   bastion_secret TEXT DEFAULT '',     -- 加密存储，同 secret
   bastion_key_fp TEXT DEFAULT '',     -- 跳板机 TOFU 指纹（与目标机独立）
+  trusted INTEGER DEFAULT 1,          -- 目标机指纹已人工确认（tofu_confirm=on 时 0=拦截）
+  host_key_pending TEXT DEFAULT '',   -- 指纹变更候选（待采纳，未采纳前旧指纹继续拦截）
   created_at REAL
 );
 CREATE TABLE IF NOT EXISTS metrics(
@@ -145,6 +147,10 @@ MIGRATIONS = [
     "ALTER TABLE hosts ADD COLUMN bastion_username TEXT DEFAULT ''",
     "ALTER TABLE hosts ADD COLUMN bastion_secret TEXT DEFAULT ''",
     "ALTER TABLE hosts ADD COLUMN bastion_key_fp TEXT DEFAULT ''",
+    # TOFU 人工确认（tofu_confirm=on 时启用）：trusted=0 未确认连接被拒；
+    # 指纹变更时新指纹存 host_key_pending 待采纳，旧指纹保持拦截
+    "ALTER TABLE hosts ADD COLUMN trusted INTEGER DEFAULT 1",
+    "ALTER TABLE hosts ADD COLUMN host_key_pending TEXT DEFAULT ''",
     # 时间线/事件流按 ts DESC 高频查询，30 天保留期下无索引会全表扫
     "CREATE INDEX IF NOT EXISTS idx_events ON events(ts)",
 ]
