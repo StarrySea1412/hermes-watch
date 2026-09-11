@@ -18,18 +18,25 @@
           }
           document.documentElement.classList.add(t === 'light' ? 'light' : 'dark');
         } catch (e) { document.documentElement.classList.add('dark'); }
+        try {
+          // 液态玻璃一键关闭：挂载前先挂 class，避免玻璃→实底闪变
+          if (localStorage.getItem('hw_glass') === 'off') {
+            document.documentElement.classList.add('glass-off');
+          }
+        } catch (e) { /* noop */ }
       })();
     </script>
   </head>
   <body>
     <div id="root"></div>
     <!-- 液态玻璃折射滤镜：feDisplacementMap 让 backdrop 真实扭曲（Chromium 支持 url() 滤镜，
-         Safari/Firefox 解析失败自动回退 CSS 里的标准 blur 链） -->
+         Safari/Firefox 解析失败自动回退 CSS 里的标准 blur 链）。位移是「最后一步」才会可见：
+         CSS 链为 blur(大) → url(#hw-glass)，重磨砂先抹平、位移波纹最后叠上 -->
     <svg aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden">
       <filter id="hw-glass" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
-        <feTurbulence type="fractalNoise" baseFrequency="0.008 0.011" numOctaves="2" seed="11" result="n"/>
-        <feGaussianBlur in="n" stdDeviation="3" result="nb"/>
-        <feDisplacementMap in="SourceGraphic" in2="nb" scale="36" xChannelSelector="R" yChannelSelector="G"/>
+        <feTurbulence type="fractalNoise" baseFrequency="0.012 0.016" numOctaves="2" seed="11" result="n"/>
+        <feGaussianBlur in="n" stdDeviation="1.5" result="nb"/>
+        <feDisplacementMap in="SourceGraphic" in2="nb" scale="64" xChannelSelector="R" yChannelSelector="G"/>
       </filter>
     </svg>
     <script type="module" src="/src/main.tsx"></script>

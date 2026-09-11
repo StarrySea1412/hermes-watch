@@ -47,6 +47,27 @@ export function ThemeToggle() {
   )
 }
 
+/* ============ 液态玻璃开关（一键关闭/恢复玻璃质感，localStorage 持久化） ============ */
+export function GlassToggle() {
+  const { t } = useT()
+  // index.html 防FOUC 脚本已按 localStorage 挂好 class，这里以 class 为准
+  const [on, setOn] = useState(() => !document.documentElement.classList.contains('glass-off'))
+  const toggle = () => {
+    const next = !on
+    setOn(next)
+    localStorage.setItem('hw_glass', next ? 'on' : 'off')
+    document.documentElement.classList.toggle('glass-off', !next)
+  }
+  return (
+    <button className="btn btn-ghost glass-toggle" onClick={toggle}
+      title={on ? t('ui.glass.on') : t('ui.glass.off')}
+      style={{ width: 38, padding: '7px 0', justifyContent: 'center',
+               color: on ? 'var(--accent)' : 'var(--text-mute)' }}>
+      <Ic name="droplet" size={15} />
+    </button>
+  )
+}
+
 /* ============ 布局 ============ */
 const NAV: { to: string; icon: IconName; key: string; end?: boolean }[] = [
   { to: '/', icon: 'grid', key: 'nav.fleet', end: true },
@@ -185,6 +206,7 @@ export function Layout() {
   )
 }
 
+/** 页面标题栏右侧的操作区：玻璃开关 + 语言 + 主题 */
 export function PageHead({ title, sub, children }: { title: string; sub?: string; children?: React.ReactNode }) {
   return (
     <div className="flex items-center justify-between gap-3 flex-wrap mb-6">
@@ -193,6 +215,7 @@ export function PageHead({ title, sub, children }: { title: string; sub?: string
         {sub && <p className="text-[12.5px] text-[var(--text-faint)] mt-1">{sub}</p>}
       </div>
       <div className="flex gap-2.5 items-center flex-wrap">
+        <GlassToggle />
         <LangToggle />
         <ThemeToggle />
         {children}

@@ -282,10 +282,28 @@ html.light { --card-shadow-hover: 0 14px 34px -12px rgba(15, 23, 42, 0.22); }
 /* backdrop-filter 标准与 -webkit 前缀分两条规则声明（选择器不同防止构建器合并重写） */
 .card, .glass-bar, .glass-bar-strong { -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate)) brightness(var(--glass-bright)); }
 html .card, html .glass-bar, html .glass-bar-strong { backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate)) brightness(var(--glass-bright)); }
-/* 真折射层：SVG feDisplacementMap 扭曲 backdrop（滤镜在 index.html）。解析不了的引擎丢弃本条，回退上一行 */
+/* 真折射：位移必须排在 blur 之后（链序=执行序），重磨砂先抹平、波纹最后叠上才看得见；
+   不支持 url() 的引擎丢弃本条回退上一行 */
 html .card, html .glass-bar, html .glass-bar-strong {
-  backdrop-filter: url(#hw-glass) blur(var(--glass-blur)) saturate(var(--glass-saturate)) brightness(var(--glass-bright));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate)) brightness(var(--glass-bright)) url(#hw-glass);
 }
+/* ---------- 一键关闭液态玻璃（html.glass-off，index.html 防FOUC提前挂类） ---------- */
+html.glass-off body::before { display: none; }
+html.glass-off .card,
+html.glass-off .glass-bar,
+html.glass-off .glass-bar-strong,
+html.glass-off .inset,
+html.glass-off .input {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+html.glass-off .card {
+  background: linear-gradient(180deg, var(--card-sheen-from), var(--card-sheen-to)), var(--bg-panel);
+  box-shadow: var(--card-shadow);
+}
+html.glass-off .glass-bar, html.glass-off .glass-bar-strong { background: var(--bg-panel); }
+html.glass-off .inset { background: var(--bg-inset); }
+html.glass-off .input { background: var(--bg-inset); }
 .inset {
   /* 玻璃化内嵌块：磨砂颗粒 + 微镜面 + 半透明底（不加 backdrop：多数在卡片内，省一层 GPU 合成） */
   background: var(--frost), linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0)), var(--glass-inset);

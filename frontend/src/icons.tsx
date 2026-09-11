@@ -7,7 +7,7 @@ import {
   Zap, SlidersHorizontal, Trash2, Sun, Moon, Monitor, Menu,
   TriangleAlert, CircleCheck, CircleX, Plus, Pencil, FlaskConical,
   RadioTower, Search, Download, Play, RefreshCw, Globe, Copy, Send,
-  Bell, WifiOff, CircleHelp, ChevronDown, Server, ShieldCheck,
+  Bell, WifiOff, CircleHelp, ChevronDown, Server, ShieldCheck, Droplet,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -45,6 +45,7 @@ const ICONS: Record<string, LucideIcon> = {
   'chevron-down': ChevronDown,
   server: Server,
   shield: ShieldCheck,
+  droplet: Droplet,
 }
 
 export type IconName = keyof typeof ICONS & string
