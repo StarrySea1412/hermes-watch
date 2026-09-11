@@ -301,20 +301,27 @@ async def chat_answer(question: str, history: list[dict] | None = None) -> dict:
         msgs.append({"role": "user", "content": _maybe_anonymize(question, mapping)})
         try:
             async with httpx.AsyncClient(timeout=45) as cli:
+                headers = {"Authorization": f"Bearer {conf.get('api_key', '')}"} if conf.get("api_key") else {}
                 r = await cli.post(
                     f"{conf['base_url'].rstrip('/')}/chat/completions",
-                    headers={"Authorization": f"Bearer {conf.get('api_key', '')}"},
+                    headers=headers,
                     json={"model": conf.get("model", "gpt-4o-mini"),
                           "messages": msgs,
                           "max_tokens": 500})
-                answer = r.json()["choices"][0]["message"]["content"]
+                data = r.json()
+                if r.status_code != 200 or "choices" not in data:
+                    # 网关错误 JSON（无效 Key/模型名/限流）必须带出原因，不能吞成 KeyError
+                    err = str((data.get("error") or {}).get("message") or data)[:200] if isinstance(data, dict) else str(data)[:200]
+                    raise RuntimeError(f"HTTP {r.status_code}: {err}")
+                answer = data["choices"][0]["message"]["content"] or ""
                 # 回答里的占位符映射回真实主机名，用户看到的仍是自己的机房
                 for k, v in mapping.items():
                     answer = answer.replace(v, k)
                 return {"answer": answer, "grounded": True, "source": "llm"}
         except Exception as e:
             _chat_base_cache.pop(conf.get("base_url") or "", None)  # 失败即失效缓存，下轮重新归一
-            return {"answer": f"LLM 调用失败（{type(e).__name__}），以下是本地规则引擎的确定性回答：\n\n"
+            reason = f"{type(e).__name__}: {e}"[:160]
+            return {"answer": f"LLM 调用失败（{reason}），以下是本地规则引擎的确定性回答：\n\n"
                               + _fallback_answer(question, ai_note=False),
                     "grounded": True, "source": "fallback"}
     return {"answer": _fallback_answer(question), "grounded": True, "source": "rules"}
@@ -339,7 +346,6 @@ async def chat_stream(question: str, history: list[dict] | None = None):
                 msgs.append({"role": role, "content": _maybe_anonymize(content, mapping)})
         msgs.append({"role": "user", "content": _maybe_anonymize(question, mapping)})
         try:
-            # API Key 可空（Ollama 等本地端点）：空 key 绝不发 Bearer 头（httpx 拒绝空凭证）
             headers = {"Authorization": f"Bearer {conf['api_key']}"} if conf.get("api_key") else {}
             async with httpx.AsyncClient(timeout=60) as cli:
                 async with cli.stream(
@@ -347,6 +353,10 @@ async def chat_stream(question: str, history: list[dict] | None = None):
                     headers=headers,
                     json={"model": conf.get("model", "gpt-4o-mini"),
                           "messages": msgs, "max_tokens": 500, "stream": True}) as r:
+                    if r.status_code != 200:
+                        body = (await r.aread()).decode("utf-8", "replace")[:200]
+                        raise RuntimeError(f"HTTP {r.status_code}: {body}")
+                    got = False
                     async for line in r.aiter_lines():
                         if not line.startswith("data:"):
                             continue
@@ -358,7 +368,11 @@ async def chat_stream(question: str, history: list[dict] | None = None):
                         except Exception:
                             continue
                         if delta:
+                            got = True
                             yield {"type": "delta", "text": delta}
+                    if not got:
+                        # 网关忽略 stream=true 返回整包 JSON / 错误体 → 零增量不能静默收尾（空气泡）
+                        raise RuntimeError("LLM 未返回任何内容（检查模型名与 API Key 配置）")
             yield {"type": "done"}
         except Exception as e:
             text = f"\n\n（LLM 流式调用失败：{type(e).__name__}，以下为本地规则引擎回答）\n\n" \
