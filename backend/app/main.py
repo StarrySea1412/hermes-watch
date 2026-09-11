@@ -9,11 +9,11 @@ import time
 from contextlib import asynccontextmanager
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
-from . import agent, analysis, auth, backups, ccswitch, db, executor, i18n, mcp_server, notify, ports, probes, reports, rules, scheduler, seed, secrets, terminal
+from . import agent, analysis, auth, backups, badge, ccswitch, db, executor, i18n, mcp_server, notify, ports, probes, reports, rules, scheduler, seed, secrets, terminal
 
 # 前端经 vite 代理（生产同源部署）访问 /api，浏览器永远同源 —— 不开 CORS 面
 
@@ -1084,6 +1084,30 @@ def public_status(token: str):
     if not expected or token != expected:
         raise HTTPException(404, i18n.t("状态页不存在或已关闭", "Status page not found or disabled"))
     return reports.render_status_page(analysis.fleet_snapshot())
+
+
+# ---------- 状态徽章 SVG（外嵌 README/看板；门禁复用 status_token，撤销即失效） ----------
+
+def _badge_response(svg: str) -> Response:
+    # 短缓存：外部 CDN 可缓存 30s，状态翻转不至长期陈旧
+    return Response(svg, media_type="image/svg+xml", headers={"Cache-Control": "public, max-age=30"})
+
+
+@app.get("/badge/{token}.svg")
+def badge_fleet(token: str):
+    if not badge.token_ok(token):
+        raise HTTPException(404, i18n.t("徽章不存在或已关闭", "Badge not found or disabled"))
+    return _badge_response(badge.fleet_badge())
+
+
+@app.get("/badge/{token}/{probe_id}.svg")
+def badge_probe(token: str, probe_id: int):
+    if not badge.token_ok(token):
+        raise HTTPException(404, i18n.t("徽章不存在或已关闭", "Badge not found or disabled"))
+    p = db.query_one("SELECT id, name, up FROM probes WHERE id=?", (probe_id,))
+    if not p:
+        raise HTTPException(404, i18n.t("拨测目标不存在", "Probe not found"))
+    return _badge_response(badge.probe_badge(p))
 
 
 # ---------- local MCP server (streamable HTTP, read-only) ----------

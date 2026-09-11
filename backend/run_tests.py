@@ -511,6 +511,48 @@ def t_probes():
         db.execute("DELETE FROM settings WHERE key='hw_lang'")
 
 
+def t_badge():
+    print("[badge]")
+    from app import badge as badge_mod
+    prev_tok = db.query_one("SELECT value FROM settings WHERE key='status_token'")
+    db.execute("INSERT INTO settings(key,value) VALUES('status_token','__t_btok__') "
+               "ON CONFLICT(key) DO UPDATE SET value=excluded.value", ())
+    db.execute("DELETE FROM probes WHERE name LIKE '__t_badge%'")
+    pid = db.execute(
+        "INSERT INTO probes(name,kind,target,up,created_at) VALUES('__t_badge__','url','https://x',1,?)",
+        (db.now(),))
+    now = db.now()
+    for i, okv in enumerate((1, 1, 0)):  # 24h 窗口 3 样本 2 好 1 坏 → 66.7%
+        db.execute("INSERT INTO probe_log(probe_id,ts,up) VALUES(?,?,?)", (pid, now - 3600 + i, okv))
+    p = db.query_one("SELECT * FROM probes WHERE id=?", (pid,))
+    svg = badge_mod.probe_badge(p)
+    check("up 徽章含名字与 UP", "__t_badge__" in svg and "UP" in svg)
+    check("24h 可用率 66.7% 进 SVG", "66.7%" in svg)
+    check("SVG 结构与 up 色板", svg.startswith("<svg") and "#16a34a" in svg and "<text" in svg)
+    db.execute("UPDATE probes SET up=0 WHERE id=?", (pid,))
+    svg2 = badge_mod.probe_badge(db.query_one("SELECT * FROM probes WHERE id=?", (pid,)))
+    check("down 徽章红色", "#dc2626" in svg2 and "DOWN" in svg2)
+    pid2 = db.execute(
+        "INSERT INTO probes(name,kind,target,up,created_at) VALUES('__t_badge2__','tcp','x:1',1,?)",
+        (db.now(),))
+    # fleet 概览：共享库可能还有真实拨测目标，期望值从库现算（测试库无关）
+    rows = db.query("SELECT up FROM probes")
+    total, ups = len(rows), sum(1 for r in rows if r["up"] == 1)
+    fsvg = badge_mod.fleet_badge()
+    if total == 0:
+        check("fleet 空表 no probes", "no probes" in fsvg)
+    else:
+        color = "#16a34a" if ups == total else ("#dc2626" if ups == 0 else "#d97706")
+        check("fleet 概览计数与色板", f"{ups}/{total} UP" in fsvg and color in fsvg)
+    check("token 校验通过/拒绝", badge_mod.token_ok("__t_btok__") and not badge_mod.token_ok("wrong"))
+    db.execute("DELETE FROM probes WHERE id IN (?,?)", (pid, pid2))
+    db.execute("DELETE FROM probe_log WHERE probe_id IN (?,?)", (pid, pid2))
+    if prev_tok:
+        db.execute("UPDATE settings SET value=? WHERE key='status_token'", (prev_tok["value"],))
+    else:
+        db.execute("DELETE FROM settings WHERE key='status_token'")
+
+
 def t_tofu():
     print("[tofu]")
     from app import ssh
@@ -626,6 +668,7 @@ if __name__ == "__main__":
     t_notify_log()
     t_backups()
     t_probes()
+    t_badge()
     t_tofu()
     t_ack_and_silence()
     t_rbac()

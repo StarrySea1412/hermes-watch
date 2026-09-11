@@ -21,9 +21,9 @@ type ProbeLog = { id: number; probe_id: number; ts: number; up: 0 | 1; latency: 
 const EMPTY_LOGS: ProbeLog[] = []
 
 /** 单条拨测卡：状态 pill + 延迟 + 48 桶心跳条带（视觉对齐 HostDetail 巡检心跳） */
-function ProbeCard({ p, logs, running, onRun, onAskDelete }: {
-  p: Probe; logs: ProbeLog[]; running: boolean
-  onRun: (p: Probe) => void; onAskDelete: (p: Probe) => void
+function ProbeCard({ p, logs, running, badgeToken, onRun, onAskDelete, onCopyBadge }: {
+  p: Probe; logs: ProbeLog[]; running: boolean; badgeToken: string
+  onRun: (p: Probe) => void; onAskDelete: (p: Probe) => void; onCopyBadge: (p: Probe) => void
 }) {
   const { t } = useT()
   const ok = p.up === 1
@@ -120,6 +120,12 @@ function ProbeCard({ p, logs, running, onRun, onAskDelete }: {
         <button className="btn btn-ghost" style={{ padding: '4px 10px', fontSize: 12 }} disabled={running} onClick={() => onRun(p)}>
           <Ic name="play" size={12} /> {running ? t('pr.running') : t('pr.runNow')}
         </button>
+        {badgeToken && (
+          <button className="btn btn-ghost" style={{ padding: '4px 10px', fontSize: 12 }} title={t('pr.badge')}
+            onClick={() => onCopyBadge(p)}>
+            <Ic name="copy" size={12} /> {t('pr.badge')}
+          </button>
+        )}
         <button className="btn btn-ghost ml-auto" style={{ padding: '4px 10px', fontSize: 12, color: 'var(--text-faint)' }}
           onClick={() => onAskDelete(p)}>
           <Ic name="trash" size={12} /> {t('btn.delete')}
@@ -144,6 +150,7 @@ export default function Probes() {
   const [adding, setAdding] = useState(false)
   const [runningId, setRunningId] = useState<number | null>(null)
   const [delTarget, setDelTarget] = useState<Probe | null>(null)
+  const [badgeToken, setBadgeToken] = useState('')
   const [iv, setIv] = useState('30')
   const [ivSaved, setIvSaved] = useState(false)
   const msgTimer = useRef<number | null>(null)
@@ -184,6 +191,8 @@ export default function Probes() {
   useEffect(() => {
     load()
     api<Record<string, string>>('/settings').then(s => { if (s.probe_interval) setIv(s.probe_interval) }).catch(() => { /* noop */ })
+    // 状态徽章门禁复用公开状态页 token（未开启时隐藏徽章入口）
+    api<{ enabled: boolean; token: string }>('/status/token').then(s => setBadgeToken(s.enabled ? s.token : '')).catch(() => { /* noop */ })
     const unsub = subscribe(e => { if (e.kind === 'probe') scheduleRefresh() })
     return () => {
       unsub()
@@ -243,9 +252,20 @@ export default function Probes() {
       .catch(e => flash(`✕ ${e.message}`))
   }
 
+  // 复制外嵌徽章链接（p 缺省 = 全 fleet 概览徽章）；门禁 token 在状态页撤销后立即失效
+  const copyBadge = async (p?: Probe) => {
+    const url = `${location.origin}/badge/${badgeToken}${p ? `/${p.id}` : ''}.svg`
+    try { await navigator.clipboard.writeText(url); flash(t('pr.badgeCopied')) } catch { /* noop */ }
+  }
+
   return (
     <div className="fade-in">
       <PageHead title={t('pr.title')} sub={t('pr.subtitle', { n: Number(iv) || 30 })}>
+        {badgeToken && (
+          <button className="btn btn-ghost" onClick={() => copyBadge()} title={t('pr.badgeFleet')}>
+            <Ic name="copy" size={13} /> {t('pr.badgeFleet')}
+          </button>
+        )}
         <span className="flex items-center gap-1.5 text-[11.5px] text-[var(--text-faint)]">
           {t('pr.interval')}
           <input className="input num inline-block text-center" inputMode="numeric" style={{ width: 56, padding: '4px 6px' }}
@@ -396,6 +416,7 @@ export default function Probes() {
           {probes.map((p, i) => (
             <div key={p.id} className="rise-in h-full" style={{ animationDelay: `${Math.min(i, 6) * 45}ms` }}>
               <ProbeCard p={p} logs={logs[p.id] ?? EMPTY_LOGS} running={runningId === p.id}
+                badgeToken={badgeToken} onCopyBadge={copyBadge}
                 onRun={runNow} onAskDelete={setDelTarget} />
             </div>
           ))}
