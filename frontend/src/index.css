@@ -93,7 +93,7 @@
 
 /* ---------- 日间：白昼灯塔 ---------- */
 html.light {
-  --bg-base: #f2f5fa;
+  --bg-base: #eef2f8;
   --bg-panel: #ffffff;
   --bg-panel-2: #ffffff00;
   --bg-hover: rgba(15, 23, 42, 0.045);
@@ -150,7 +150,7 @@ html.light {
   --topo-ring: rgba(70, 92, 132, 0.12);
   --topo-glow: rgba(8, 145, 178, 0.05);
 
-  /* 液态玻璃层（白昼灯塔：奶白重磨砂 + 更亮高光） */
+  /* 液态玻璃层（白昼灯塔：奶白重磨砂 + 阳光色眩光） */
   --glass-bg: rgba(255, 255, 255, 0.62);
   --glass-strong: rgba(255, 255, 255, 0.88);
   --glass-blur: 40px;
@@ -159,12 +159,12 @@ html.light {
   --glass-hi: rgba(255, 255, 255, 0.95);
   --glass-edge: rgba(15, 23, 42, 0.05);
   --glass-ring: rgba(255, 255, 255, 0.6);
-  --glass-glare: rgba(255, 255, 255, 0.7);
+  --glass-glare: rgba(255, 251, 235, 0.85);
   --glass-bloom: inset 0 0 30px rgba(255, 255, 255, 0.45);
   --glass-inset: rgba(238, 242, 248, 0.65);
   --glass-input: rgba(255, 255, 255, 0.55);
-  --refract-l: rgba(8, 145, 178, 0.09);
-  --refract-r: rgba(124, 58, 237, 0.08);
+  --refract-l: rgba(8, 145, 178, 0.13);
+  --refract-r: rgba(124, 58, 237, 0.11);
 
   color-scheme: light;
 }
@@ -186,7 +186,7 @@ body {
   -webkit-font-smoothing: antialiased;
   transition: color .25s ease;
 }
-/* 液态环境光：三团彩色光斑缓慢漂移（纯 transform 动画，GPU 合成不重排）——
+/* 液态环境光：四团彩色光斑缓慢漂移（纯 transform 动画，GPU 合成不重排）——
    玻璃质感九成靠背后有东西可折射，光斑必须够浓才看得出 blur */
 body::before {
   content: '';
@@ -195,9 +195,10 @@ body::before {
   z-index: -1;
   pointer-events: none;
   background:
-    radial-gradient(42% 38% at 24% 26%, var(--blob-1, transparent), transparent 70%),
-    radial-gradient(38% 34% at 78% 62%, var(--blob-2, transparent), transparent 70%),
-    radial-gradient(32% 28% at 52% 106%, var(--blob-3, transparent), transparent 70%);
+    radial-gradient(42% 38% at 24% 26%, var(--blob-1, transparent), transparent 68%),
+    radial-gradient(38% 34% at 78% 62%, var(--blob-2, transparent), transparent 68%),
+    radial-gradient(32% 28% at 52% 106%, var(--blob-3, transparent), transparent 68%),
+    radial-gradient(26% 24% at 86% 12%, var(--blob-4, transparent), transparent 66%);
   animation: blob-drift 52s ease-in-out infinite alternate;
 }
 @keyframes blob-drift {
@@ -211,13 +212,15 @@ html.dark {
   --blob-1: rgba(34, 211, 238, 0.26);
   --blob-2: rgba(139, 92, 246, 0.22);
   --blob-3: rgba(244, 114, 182, 0.15);
+  --blob-4: rgba(251, 191, 36, 0.09);
 }
 html.light {
-  --glow-1: rgba(6, 182, 212, 0.08);
-  --glow-2: rgba(124, 58, 237, 0.06);
-  --blob-1: rgba(6, 182, 212, 0.2);
-  --blob-2: rgba(139, 92, 246, 0.16);
-  --blob-3: rgba(244, 114, 182, 0.13);
+  --glow-1: rgba(6, 182, 212, 0.1);
+  --glow-2: rgba(124, 58, 237, 0.08);
+  --blob-1: rgba(14, 165, 233, 0.32);
+  --blob-2: rgba(124, 58, 237, 0.24);
+  --blob-3: rgba(236, 72, 153, 0.18);
+  --blob-4: rgba(245, 158, 11, 0.15);
 }
 /* 磨砂颗粒纹理（SVG 噪声，低透明度平铺，给玻璃"砂面"质感并消除渐变色带） */
 html { --frost: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='0.05'/%3E%3C/svg%3E"); }
@@ -263,7 +266,11 @@ html.dark {
 html.light {
   --card-sheen-from: rgba(255,255,255,0.6);
   --card-sheen-to: rgba(255,255,255,0);
-  --card-shadow: 0 14px 36px -18px rgba(15,23,42,0.2), 0 1px 2px rgba(15,23,42,0.06);
+  /* 白昼玻璃投影带棱彩光晕：玻璃板把身后的彩色光斑"投"在地上 */
+  --card-shadow: 0 14px 36px -18px rgba(15,23,42,0.2),
+                 0 22px 60px -30px rgba(14,165,233,0.32),
+                 0 10px 44px -26px rgba(124,58,237,0.2),
+                 0 1px 2px rgba(15,23,42,0.06);
 }
 .card-hover:hover {
   border-color: var(--border-strong);
