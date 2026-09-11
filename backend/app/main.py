@@ -124,6 +124,10 @@ class HostIn(BaseModel):
     username: str = "root"
     secret: str = ""
     group_name: str = "default"
+    bastion_host: str = ""      # 堡垒机/跳板（空=直连）
+    bastion_port: int = 22
+    bastion_username: str = "root"
+    bastion_secret: str = ""
 
 
 @app.post("/api/hosts")
@@ -131,9 +135,11 @@ async def add_host(h: HostIn):
     if db.query_one("SELECT id FROM hosts WHERE name=?", (h.name,)):
         raise HTTPException(400, i18n.t("同名主机已存在", "A host with this name already exists"))
     hid = db.execute(
-        "INSERT INTO hosts(name,hostname,port,username,secret,group_name,mock,created_at) "
-        "VALUES(?,?,?,?,?,?,0,?)", (h.name, h.hostname, h.port, h.username,
-                                    secrets.encrypt(h.secret), h.group_name, db.now()))
+        "INSERT INTO hosts(name,hostname,port,username,secret,group_name,mock,created_at,"
+        "bastion_host,bastion_port,bastion_username,bastion_secret) VALUES(?,?,?,?,?,?,0,?,?,?,?,?)",
+        (h.name, h.hostname, h.port, h.username, secrets.encrypt(h.secret), h.group_name, db.now(),
+         (h.bastion_host or "").strip(), h.bastion_port or 22, (h.bastion_username or "").strip() or "root",
+         secrets.encrypt(h.bastion_secret) if (h.bastion_secret or "").strip() else ""))
     await broadcast("host", i18n.t(f"新增主机 {h.name}", f"Host added: {h.name}"))
     return {"id": hid}
 

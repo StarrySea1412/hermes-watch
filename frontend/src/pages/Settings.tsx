@@ -59,7 +59,9 @@ export default function Settings() {
   const { t } = useT()
   const [hosts, setHosts] = useState<Host[]>([])
   const [settings, setSettings] = useState<Record<string, string>>({})
-  const [form, setForm] = useState({ name: '', hostname: '', username: 'root', secret: '', group_name: 'default' })
+  const [form, setForm] = useState({ name: '', hostname: '', username: 'root', secret: '', group_name: 'default',
+    bastion_host: '', bastion_port: '22', bastion_username: 'root', bastion_secret: '' })
+  const [bastionOpen, setBastionOpen] = useState(false)
   const [msg, setMsg] = useState('')
   const [provider, setProvider] = useState<any>({})
   const [th, setTh] = useState<Record<string, string>>({})
@@ -127,9 +129,12 @@ export default function Settings() {
   const saveSetting = async (k: string, v: string) => { await api('/settings', { method: 'POST', body: JSON.stringify({ [k]: v }) }); load() }
   const add = async () => {
     try {
-      await api('/hosts', { method: 'POST', body: JSON.stringify(form) })
+      await api('/hosts', { method: 'POST', body: JSON.stringify({
+        ...form, bastion_port: Number(form.bastion_port) || 22,
+      }) })
       setMsg(t('st.hosts.added', { n: form.name }))
-      setForm({ name: '', hostname: '', username: 'root', secret: '', group_name: 'default' })
+      setForm({ name: '', hostname: '', username: 'root', secret: '', group_name: 'default',
+        bastion_host: '', bastion_port: '22', bastion_username: 'root', bastion_secret: '' })
       load()
     } catch (e: any) { setMsg(`✕ ${e.message}`) }
   }
@@ -642,6 +647,23 @@ export default function Settings() {
           <input className="input" placeholder={t('st.hosts.user')} value={form.username} onChange={e => setForm({ ...form, username: e.target.value })} />
           <input className="input" placeholder={t('st.hosts.phSecret')} type="password" value={form.secret} onChange={e => setForm({ ...form, secret: e.target.value })} />
           <button className="btn btn-primary justify-center" onClick={add}>{t('st.hosts.add')}</button>
+        </div>
+        {/* 堡垒机/跳板折叠区：经跳板隧道路由 SSH（TOFU 指纹与目标机独立），口令同样加密存储 */}
+        <button className="text-[11.5px] text-[var(--text-faint)] hover:text-[var(--accent)] flex items-center gap-1 mt-2.5"
+          onClick={() => setBastionOpen(v => !v)}>
+          <Ic name="chevron-down" size={12} style={{ transform: bastionOpen ? 'rotate(180deg)' : undefined, transition: 'transform .2s' }} />
+          {t('st.hosts.bastion')}
+        </button>
+        <div className={`acc-body ${bastionOpen ? 'open' : ''}`}>
+          <div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-2.5">
+              <input className="input mono" placeholder={t('st.hosts.bastionHost')} value={form.bastion_host} onChange={e => setForm({ ...form, bastion_host: e.target.value })} />
+              <input className="input num" inputMode="numeric" placeholder={t('st.hosts.bastionPort')} value={form.bastion_port} onChange={e => setForm({ ...form, bastion_port: e.target.value })} />
+              <input className="input" placeholder={t('st.hosts.bastionUser')} value={form.bastion_username} onChange={e => setForm({ ...form, bastion_username: e.target.value })} />
+              <input className="input" type="password" placeholder={t('st.hosts.bastionSecret')} value={form.bastion_secret} onChange={e => setForm({ ...form, bastion_secret: e.target.value })} />
+            </div>
+            <div className="text-[11px] text-[var(--text-faint)] mt-1.5">{t('st.hosts.bastionHint')}</div>
+          </div>
         </div>
         {msg && <div className="text-[12px] mt-2.5 text-[var(--text-mute)]">{msg}</div>}
         <p className="text-[11px] text-[var(--text-faint)] mt-3 leading-relaxed">

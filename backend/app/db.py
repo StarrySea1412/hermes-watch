@@ -22,6 +22,11 @@ CREATE TABLE IF NOT EXISTS hosts(
   group_name TEXT DEFAULT 'default',
   mock INTEGER DEFAULT 0,
   chaos TEXT DEFAULT '',
+  bastion_host TEXT DEFAULT '',       -- 堡垒机/跳板 host（空=直连）
+  bastion_port INTEGER DEFAULT 22,
+  bastion_username TEXT DEFAULT '',
+  bastion_secret TEXT DEFAULT '',     -- 加密存储，同 secret
+  bastion_key_fp TEXT DEFAULT '',     -- 跳板机 TOFU 指纹（与目标机独立）
   created_at REAL
 );
 CREATE TABLE IF NOT EXISTS metrics(
@@ -134,6 +139,12 @@ MIGRATIONS = [
     "ALTER TABLE probes ADD COLUMN dns_expected TEXT DEFAULT ''",
     "ALTER TABLE probes ADD COLUMN push_token TEXT DEFAULT ''",
     "ALTER TABLE probes ADD COLUMN push_grace_s INTEGER DEFAULT 600",
+    # 堡垒机/跳板链式连接：per-host 跳板配置，指纹独立于目标机（TOFU 各自一份）
+    "ALTER TABLE hosts ADD COLUMN bastion_host TEXT DEFAULT ''",
+    "ALTER TABLE hosts ADD COLUMN bastion_port INTEGER DEFAULT 22",
+    "ALTER TABLE hosts ADD COLUMN bastion_username TEXT DEFAULT ''",
+    "ALTER TABLE hosts ADD COLUMN bastion_secret TEXT DEFAULT ''",
+    "ALTER TABLE hosts ADD COLUMN bastion_key_fp TEXT DEFAULT ''",
 ]
 
 SCHEMA_EXTRA = """

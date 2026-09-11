@@ -663,6 +663,94 @@ def t_mcp_tools():
         check("probe_history 输出心跳行", "心跳" in out3)
 
 
+def t_bastion():
+    print("[bastion]")
+    from app import ssh
+
+    class FakeConn:
+        def __init__(self, label):
+            self.label, self.tunnel, self.closed = label, None, False
+
+        async def wait(self):
+            pass
+
+        def close(self):
+            self.closed = True
+
+    conns = []
+
+    async def fake_connect(host_, port=None, username=None, password=None,
+                           client_keys=None, known_hosts=None, client_factory=None,
+                           tunnel=None, **kw):
+        c = FakeConn(host_)
+        c.tunnel = tunnel
+        conns.append(c)
+        return c
+
+    orig = ssh.asyncssh.connect
+    ssh.asyncssh.connect = fake_connect
+    try:
+        # ① 直连主机：行为不变，无隧道
+        hid1 = db.execute(
+            "INSERT INTO hosts(name,hostname,port,username,secret,group_name,mock,created_at) "
+            "VALUES('__t_jump_a__','10.0.0.1',22,'root','','t',0,?)", (db.now(),))
+        h1 = dict(db.query_one("SELECT * FROM hosts WHERE id=?", (hid1,)))
+        conn = asyncio.run(ssh.connect_async(h1))
+        check("直连主机无隧道", len(conns) == 1 and conn.tunnel is None)
+        db.execute("DELETE FROM hosts WHERE id=?", (hid1,))
+        conns.clear()
+
+        # ② 堡垒机主机：先连跳板再隧道连目标
+        hid = db.execute(
+            "INSERT INTO hosts(name,hostname,port,username,secret,group_name,mock,created_at,"
+            "bastion_host,bastion_port,bastion_username,bastion_key_fp) "
+            "VALUES('__t_jump__','10.0.0.9',22,'root','','t',0,?, 'jump.corp',2222,'ops','')",
+            (db.now(),))
+        h = dict(db.query_one("SELECT * FROM hosts WHERE id=?", (hid,)))
+        conn = asyncio.run(ssh.connect_async(h))
+        check("跳板先连、目标后连且经其隧道",
+              len(conns) == 2 and conns[0].label == "jump.corp"
+              and conns[1].label == "10.0.0.9" and conns[1].tunnel is conns[0])
+        # ③ 跳板 TOFU 指纹写独立列，不污染目标机指纹
+        class K:
+            def get_fingerprint(self, algo="sha256"):
+                return "SHA256:JUMPKEY"
+        cl = ssh._TofuClient({"id": hid, "hostname": "jump.corp",
+                              "host_key_fp": "", "_fp_col": "bastion_key_fp"})
+        check("跳板指纹写 bastion_key_fp",
+              cl.validate_host_public_key("jump.corp", "1.2.3.4", 22, K())
+              and db.query_one("SELECT bastion_key_fp FROM hosts WHERE id=?", (hid,))["bastion_key_fp"] == "SHA256:JUMPKEY")
+        check("目标机指纹列未被污染",
+              db.query_one("SELECT host_key_fp FROM hosts WHERE id=?", (hid,))["host_key_fp"] == "")
+        # ④ 目标连接关闭 → 自动回收跳板
+        asyncio.run(ssh._chain_close(conns[0], conns[1]))
+        check("目标关闭后回收跳板连接", conns[0].closed)
+        # ⑤ 目标连不上时跳板也要回收（不泄漏半开隧道）
+        conns.clear()
+
+        async def fail_target(host_, port=None, tunnel=None, **kw):
+            if tunnel is not None:
+                raise OSError("target unreachable")
+            c = FakeConn("bastion")
+            conns.append(c)
+            return c
+
+        ssh.asyncssh.connect = fail_target
+        try:
+            asyncio.run(ssh.connect_async(h))
+            check("目标失败应抛错", False)
+        except OSError:
+            check("目标失败向上抛错", True)
+        check("目标失败仍回收跳板", len(conns) == 1 and conns[0].closed)
+        db.execute("DELETE FROM hosts WHERE id=?", (hid,))
+        # ⑥ 跳板口令加密回环（与主机口令同机制）
+        from app import secrets as sec
+        enc = sec.encrypt("jump-pw")
+        check("跳板口令加密回环", sec.decrypt(enc) == "jump-pw")
+    finally:
+        ssh.asyncssh.connect = orig
+
+
 def t_tofu():
     print("[tofu]")
     from app import ssh
@@ -781,6 +869,7 @@ if __name__ == "__main__":
     t_probe_dns_push()
     t_badge()
     t_mcp_tools()
+    t_bastion()
     t_tofu()
     t_ack_and_silence()
     t_rbac()
