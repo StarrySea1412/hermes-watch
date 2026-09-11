@@ -23,6 +23,15 @@
   </head>
   <body>
     <div id="root"></div>
+    <!-- 液态玻璃折射滤镜：feDisplacementMap 让 backdrop 真实扭曲（Chromium 支持 url() 滤镜，
+         Safari/Firefox 解析失败自动回退 CSS 里的标准 blur 链） -->
+    <svg aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden">
+      <filter id="hw-glass" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+        <feTurbulence type="fractalNoise" baseFrequency="0.008 0.011" numOctaves="2" seed="11" result="n"/>
+        <feGaussianBlur in="n" stdDeviation="3" result="nb"/>
+        <feDisplacementMap in="SourceGraphic" in2="nb" scale="36" xChannelSelector="R" yChannelSelector="G"/>
+      </filter>
+    </svg>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

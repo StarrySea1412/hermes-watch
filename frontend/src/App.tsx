@@ -21,9 +21,18 @@ const Probes = lazy(() => import('./pages/Probes'))
 
 function PageFallback() {
   const { t } = useT()
+  // 玻璃骨架屏：路由 chunk 加载间隙也保持液态玻璃语言（卡体 .card 自带折射/眩光/颗粒）
   return (
-    <div className="h-full flex items-center justify-center text-[var(--text-faint)] text-[13px]">
-      <span className="pulse-dot" style={{ background: 'var(--accent)' }} /> {t('ui.loading')}
+    <div className="h-full flex items-center justify-center p-6">
+      <div className="card p-6 w-full max-w-[380px] rise-in">
+        <div className="flex items-center gap-2.5 mb-4">
+          <span className="pulse-dot" style={{ background: 'var(--accent)' }} />
+          <span className="text-[12.5px] text-[var(--text-mute)]">{t('ui.loading')}</span>
+        </div>
+        <div className="skel h-3 rounded-full mb-2.5" style={{ width: '82%' }} />
+        <div className="skel h-3 rounded-full mb-2.5" style={{ width: '64%', animationDelay: '.15s' }} />
+        <div className="skel h-3 rounded-full" style={{ width: '46%', animationDelay: '.3s' }} />
+      </div>
     </div>
   )
 }
