@@ -222,8 +222,8 @@ html.light {
   --blob-3: rgba(103, 232, 249, 0.1);
   --blob-4: rgba(45, 212, 191, 0.07);
 }
-/* 磨砂颗粒纹理（SVG 噪声，低透明度平铺，给玻璃"砂面"质感并消除渐变色带） */
-html { --frost: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='0.05'/%3E%3C/svg%3E"); }
+/* 磨砂颗粒纹理（SVG 噪声，极低透明度平铺，给玻璃"砂面"质感并消除渐变色带） */
+html { --frost: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E"); }
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -243,9 +243,10 @@ html { --frost: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg
 }
 
 /* ---------- 通用组件类 ---------- */
-/* 液态磨砂玻璃卡片：感光眩光（--mx/--my 由 ui.tsx 写入）+ 棱镜色散边（左青右紫，
-   模拟玻璃边缘折射分光）+ 磨砂颗粒 + 顶部镜面 + 奶感玻璃底 */
+/* 液态玻璃卡片（iOS 式）：表面纯净磨砂（backdrop 无噪声位移），折射集中在边缘环
+   （.card::before + 环形 mask 承载强位移滤镜）——透镜效应长在棱上才是真玻璃 */
 .card {
+  position: relative;
   background:
     radial-gradient(340px at var(--mx, 50%) var(--my, -40%), var(--glass-glare), transparent 70%),
     linear-gradient(90deg, var(--refract-l), transparent 12%, transparent 88%, var(--refract-r)),
@@ -255,7 +256,7 @@ html { --frost: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg
   border: 1px solid var(--border);
   border-radius: 14px;
   box-shadow: var(--glass-bloom), inset 0 1px 0 var(--glass-hi), inset 0 -1px 0 var(--glass-edge),
-              0 0 0 1px var(--glass-ring), var(--card-shadow);
+              inset 0 0 0 1px rgba(255, 255, 255, 0.04), 0 0 0 1px var(--glass-ring), var(--card-shadow);
   transition: border-color .18s ease, transform .18s ease, box-shadow .18s ease;
 }
 html.dark {
@@ -279,21 +280,36 @@ html.light { --card-shadow-hover: 0 14px 34px -12px rgba(15, 23, 42, 0.22); }
 /* 顶栏/侧栏玻璃面（移动端抽屉用 strong：盖在内容上需要更高不透明度） */
 .glass-bar, .glass-bar-strong { background: var(--glass-bg); }
 .glass-bar-strong { --glass-blur: 48px; background: var(--glass-strong); }
-/* backdrop-filter 标准与 -webkit 前缀分两条规则声明（选择器不同防止构建器合并重写） */
+/* backdrop-filter 标准与 -webkit 前缀分两条规则声明（选择器不同防止构建器合并重写）。
+   表面：纯净重磨砂（无噪声位移，iOS 式干净）；折射由 ::before 边缘环承载 */
 .card, .glass-bar, .glass-bar-strong { -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate)) brightness(var(--glass-bright)); }
 html .card, html .glass-bar, html .glass-bar-strong { backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate)) brightness(var(--glass-bright)); }
-/* 真折射：位移必须排在 blur 之后（链序=执行序），重磨砂先抹平、波纹最后叠上才看得见；
-   不支持 url() 的引擎丢弃本条回退上一行 */
-html .card, html .glass-bar, html .glass-bar-strong {
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate)) brightness(var(--glass-bright)) url(#hw-glass);
+
+/* 边缘折射环：环带内强位移+轻模糊（棱上透镜），表面不参与——真实玻璃的弯折发生在棱边 */
+.card, .glass-bar, .glass-bar-strong { position: relative; }
+.card::before, .glass-bar::before, .glass-bar-strong::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 14px;                      /* 环带厚度 */
+  pointer-events: none;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+  -webkit-backdrop-filter: url(#hw-glass) blur(6px) saturate(1.4);
+  backdrop-filter: url(#hw-glass) blur(6px) saturate(1.4);
 }
 /* ---------- 一键关闭液态玻璃（html.glass-off，index.html 防FOUC提前挂类） ---------- */
 html.glass-off body::before { display: none; }
+html.glass-off .card::before, html.glass-off .glass-bar::before,
+html.glass-off .glass-bar-strong::before { display: none; }
 html.glass-off .card,
 html.glass-off .glass-bar,
 html.glass-off .glass-bar-strong,
 html.glass-off .inset,
-html.glass-off .input {
+html.glass-off .input,
+html.glass-off .card::before {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
