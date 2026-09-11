@@ -67,8 +67,20 @@ def t_rules():
     check("容器发现标题带名字与状态", any("db" in k and "exited" in k for k in ct))
 
     check("健康分: 无发现=100", rules.health_score([]) == 100)
-    check("健康分: crit 扣 25", rules.health_score([{"severity": "crit"}]) == 75)
-    check("健康分: 下限 0", rules.health_score([{"severity": "crit"}] * 5) == 0)
+    # 类型权重：安全类重（login crit −30）、性能噪声类轻（cpu warn −4）
+    check("健康分: 类型权重 login crit 扣 30",
+          rules.health_score([{"severity": "crit", "type": "login"}]) == 70)
+    check("健康分: 类型权重 memory crit 扣 24",
+          rules.health_score([{"severity": "crit", "type": "memory"}]) == 76)
+    check("健康分: 类型权重 cpu warn 扣 4",
+          rules.health_score([{"severity": "warn", "type": "cpu"}]) == 96)
+    # 同类衰减：4 条同型 crit = 24+12+6+3 = 45 → 55，不再线性砸穿
+    check("健康分: 同类发现指数衰减",
+          rules.health_score([{"severity": "crit", "type": "disk"}] * 4) == 55)
+    # 下限 0：多类型重发现叠加可打穿
+    check("健康分: 多类型 crit 叠加触底 0",
+          rules.health_score([{"severity": "crit", "type": t} for t in
+                              ("login", "container", "service", "disk", "memory", "swap")]) == 0)
     check("状态映射", rules.status_of(95) == "ok" and rules.status_of(80) == "warn" and rules.status_of(50) == "crit")
     check("严重度排序", rules.severity_rank("crit") > rules.severity_rank("warn") > rules.severity_rank("info"))
 

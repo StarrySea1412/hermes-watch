@@ -40,7 +40,23 @@ def thresholds() -> dict:
 
 SEV_ORDER = {"info": 0, "warn": 1, "crit": 2}
 
-DEDUCTIONS = {"warn": 8, "crit": 25}
+# 健康分权重（crit, warn）：按发现类型的业务影响扣分——安全/容量重、性能/温度轻。
+# 同类发现重复出现按 0.5^n 衰减：同型告警堆积不再无脑线性叠加砸穿分数。
+SCORE_WEIGHTS = {
+    "login": (30, 12),      # 可疑登录：安全事件最重
+    "container": (24, 8),   # 容器退出/死亡
+    "service": (24, 8),     # systemd 失败
+    "disk": (24, 8),        # 容量风险
+    "memory": (24, 8),
+    "swap": (16, 6),
+    "cert": (18, 8),        # 证书临期
+    "port_new": (10, 5),    # 新暴露端口
+    "cpu": (10, 4),         # 性能噪声类最轻
+    "load": (10, 4),
+    "io": (6, 3),
+    "temp": (6, 3),
+}
+SCORE_WEIGHT_DEFAULT = (18, 6)
 
 
 def clear_thresholds() -> dict:
@@ -150,10 +166,19 @@ def evaluate(host: dict, latest: dict | None, extras: dict) -> list[dict]:
 
 
 def health_score(findings: list[dict]) -> int:
-    score = 100
+    """健康分 = 100 − Σ(类型权重 × 0.5^同类次数)，下限 0。
+
+    权重区分发现类型的业务影响（SCORE_WEIGHTS：安全/容量重、性能/温度轻）；
+    同类重复发现指数衰减——同型告警堆积不再无脑线性叠加砸穿分数。"""
+    seen: dict[str, int] = {}
+    penalty = 0.0
     for x in findings:
-        score -= DEDUCTIONS.get(x["severity"], 0)
-    return max(0, min(100, score))
+        t = str(x.get("type") or "?")
+        n = seen.get(t, 0)
+        seen[t] = n + 1
+        w = SCORE_WEIGHTS.get(t, SCORE_WEIGHT_DEFAULT)
+        penalty += w[0 if x.get("severity") == "crit" else 1] * (0.5 ** n)
+    return max(0, min(100, round(100 - penalty)))
 
 
 def status_of(score: int) -> str:
