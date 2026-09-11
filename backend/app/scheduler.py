@@ -178,6 +178,7 @@ async def process_findings(h: dict, latest: dict, extras: dict) -> list[dict]:
     prev_open = {r["type"] for r in open_rows}
     silenced = (h.get("silenced_until") or 0) > db.now()
     new = []
+    crit_new = []  # 本轮新 crit：聚合为一条通知（同轮同主机不再一发现一条、告警风暴刷屏）
     for f in triggered:
         if f["type"] in prev_open:  # one open finding per type per host
             continue
@@ -196,11 +197,8 @@ async def process_findings(h: dict, latest: dict, extras: dict) -> list[dict]:
             await _notify_broadcast("finding", i18n.t(f"[{f['severity'].upper()}] {f['title']}",
                                                       f"[{f['severity'].upper()}] {f['title']}"),
                                     {"finding_id": fid})
-        if f["severity"] == "crit" and not silenced:
-            ok, _ = await notify.send(i18n.t("发现告警", "Finding alert"),
-                                      i18n.t(f"{h['name']}: {f['title']}", f"{h['name']}: {f['title']}"))
-            if ok:
-                db.execute("UPDATE findings SET last_notified=? WHERE id=?", (db.now(), fid))
+        if f["severity"] == "crit":
+            crit_new.append((fid, f))
         if f["severity"] == "crit" or f["type"] in ("login",):
             # auto deep-dive critical findings, mirroring the demo story
             try:
@@ -208,6 +206,15 @@ async def process_findings(h: dict, latest: dict, extras: dict) -> list[dict]:
                 await analysis.analyze_finding(h, fresh)
             except Exception:
                 pass
+    if crit_new and not silenced:
+        lines = [f"• {f['title']}" for _, f in crit_new]
+        ok, _ = await notify.send(
+            i18n.t("发现告警", "Finding alert"),
+            i18n.t(f"{h['name']}: {len(crit_new)} 条新告警\n" + "\n".join(lines),
+                   f"{h['name']}: {len(crit_new)} new alerts\n" + "\n".join(lines)))
+        if ok:
+            db.executemany("UPDATE findings SET last_notified=? WHERE id=?",
+                           [(db.now(), fid) for fid, _ in crit_new])
     _resend_crit(h["name"], open_rows, active_types)
     _check_recovery(h["id"], active_types)
     return new

@@ -13,7 +13,7 @@ from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSoc
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
-from . import agent, analysis, auth, backups, badge, ccswitch, db, executor, i18n, mcp_server, notify, ports, probes, reports, scheduler, seed, secrets, terminal
+from . import agent, analysis, auth, backups, badge, ccswitch, db, executor, guard, i18n, mcp_server, notify, ports, probes, reports, scheduler, seed, secrets, terminal
 
 # 前端经 vite 代理（生产同源部署）访问 /api，浏览器永远同源 —— 不开 CORS 面
 
@@ -46,6 +46,11 @@ AUTH_OPEN = ("/api/auth/status", "/api/auth/login",
 @app.middleware("http")
 async def panel_auth_middleware(request: Request, call_next):
     path = request.url.path
+    # 公开端点兜底限流（token 门禁之外的防滥用层）+ 访问审计（内存环形缓冲）
+    if any(path.startswith(p) for p in ("/badge/", "/status/", "/api/push/", "/api/agent/push")):
+        ip = request.client.host if request.client else "-"
+        if not guard.allow(ip):
+            return JSONResponse({"detail": i18n.t("请求过于频繁", "Too many requests")}, status_code=429)
     if auth.enabled() and path.startswith("/api") and path not in AUTH_OPEN \
             and not path.startswith("/api/push/"):
         role = auth.session_role(request.cookies.get(auth.COOKIE, ""))
@@ -57,7 +62,10 @@ async def panel_auth_middleware(request: Request, call_next):
             return JSONResponse({"detail": i18n.t("观察者角色为只读，写操作需要管理员权限",
                                                   "Observer role is read-only — write operations require admin")},
                                  status_code=403)
-    return await call_next(request)
+    resp = await call_next(request)
+    if any(path.startswith(p) for p in ("/badge/", "/status/", "/api/push/", "/api/agent/push")):
+        guard.audit(request.client.host if request.client else "-", path, resp.status_code)
+    return resp
 
 _subs: set[asyncio.Queue] = set()
 
@@ -1152,6 +1160,14 @@ def badge_probe(token: str, probe_id: int):
     if not p:
         raise HTTPException(404, i18n.t("拨测目标不存在", "Probe not found"))
     return _badge_response(badge.probe_badge(p))
+
+
+# ---------- 公开访问审计（admin only：会话门自动套用 /api 前缀） ----------
+
+@app.get("/api/guard/audit")
+def guard_audit():
+    """最近 500 条公开端点访问（徽章/状态页/push），重启即清。"""
+    return guard.recent()
 
 
 # ---------- local MCP server (streamable HTTP, read-only) ----------

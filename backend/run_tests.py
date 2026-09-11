@@ -869,6 +869,54 @@ def t_bastion():
         ssh.asyncssh.connect = orig
 
 
+def t_guard():
+    print("[guard]")
+    from app import guard
+    check("窗口内正常放行", guard.allow("1.2.3.4") and guard.allow("1.2.3.4"))
+    guard.MAX_REQ, save_max = 3, guard.MAX_REQ
+    try:
+        ips = [guard.allow("5.6.7.8") for _ in range(3)]
+        check("窗口内第 3 次仍放行、第 4 次超限拒绝", all(ips) and not guard.allow("5.6.7.8"))
+        check("按 IP 隔离", guard.allow("9.9.9.9"))
+    finally:
+        guard.MAX_REQ = save_max
+    guard.audit("1.1.1.1", "/badge/x.svg", 200)
+    guard.audit("2.2.2.2", "/status/tok", 404)
+    rec = guard.recent()
+    check("审计环形缓冲按序记录", rec[-2:][0]["ip"] == "1.1.1.1" and rec[-1]["code"] == 404)
+
+
+def t_alert_aggregate():
+    print("[alert-aggregate]")
+    from app import scheduler
+    hid = db.execute(
+        "INSERT INTO hosts(name,hostname,group_name,mock,created_at) VALUES('__t_agg__','x','t',1,?)",
+        (db.now(),))
+    h = dict(db.query_one("SELECT * FROM hosts WHERE id=?", (hid,)))
+    sent = []
+    orig = scheduler.notify.send
+
+    async def fake_send(kind, body):
+        sent.append((kind, body))
+        return True, ""
+
+    scheduler.notify.send = fake_send
+    try:
+        new = asyncio.run(scheduler.process_findings(h, {"disk": 96, "mem": 93, "cpu": 10, "load1": 0.5}, {}))
+        crits = [f for f in new if f["severity"] == "crit"]
+        check("同轮双 crit 只发一条聚合通知", len(crits) == 2 and len(sent) == 1)
+        check("聚合通知含两条标题行", sent[0][1].count("•") == 2)
+        marks = [r["last_notified"] for r in
+                 db.query("SELECT last_notified FROM findings WHERE host_id=?", (hid,))]
+        check("两条发现均已标记 last_notified", all(marks) and len(marks) == 2)
+    finally:
+        scheduler.notify.send = orig
+        db.execute("DELETE FROM findings WHERE host_id=?", (hid,))
+        db.execute("DELETE FROM events WHERE host_id=?", (hid,))
+        db.execute("DELETE FROM proposals WHERE finding_id NOT IN (SELECT id FROM findings)")
+        db.execute("DELETE FROM hosts WHERE id=?", (hid,))
+
+
 def t_tofu():
     print("[tofu]")
     from app import ssh
@@ -993,6 +1041,8 @@ if __name__ == "__main__":
     t_badge()
     t_mcp_tools()
     t_bastion()
+    t_guard()
+    t_alert_aggregate()
     t_tofu()
     t_ack_and_silence()
     t_rbac()
