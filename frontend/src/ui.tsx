@@ -190,7 +190,7 @@ export function Layout() {
             <span className="pulse-dot" style={{ background: 'var(--ok)' }} />{t('ui.status.running')}
           </span>
         </header>
-        <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-7 relative min-w-0">
+        <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-7 relative min-w-0 glass-sheet">
           {flash && (
             <div className="absolute top-5 right-4 sm:right-7 left-4 sm:left-auto z-50 fade-in flex sm:justify-end">
               <div className="card px-4 py-2.5 flex items-center gap-2.5" style={{ borderColor: 'var(--crit-bg)' }}>

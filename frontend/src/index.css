@@ -64,10 +64,10 @@
   --axis-label: #5a6a85;
   --axis-line: #1c2941;
 
-  /* 拓扑节点底色 */
-  --node-ok: #1a2438;
-  --node-warn: #2a2313;
-  --node-crit: #2a1518;
+  /* 拓扑节点底色（半透明：浮在全域玻璃板上呈玻璃节点） */
+  --node-ok: rgba(26, 36, 56, 0.6);
+  --node-warn: rgba(42, 35, 19, 0.6);
+  --node-crit: rgba(42, 21, 24, 0.6);
   --link-ok: #22314e;
   --topo-ring: rgba(129, 152, 194, 0.09);
   --topo-glow: rgba(34, 211, 238, 0.06);
@@ -142,9 +142,9 @@ html.light {
   --axis-label: #7488a8;
   --axis-line: #dbe2ee;
 
-  --node-ok: #ffffff;
-  --node-warn: #fdf4e3;
-  --node-crit: #fdeaea;
+  --node-ok: rgba(255, 255, 255, 0.65);
+  --node-warn: rgba(253, 244, 227, 0.7);
+  --node-crit: rgba(253, 234, 234, 0.7);
   --link-ok: #c2cddf;
   --topo-ring: rgba(70, 92, 132, 0.12);
   --topo-glow: rgba(8, 145, 178, 0.05);
@@ -280,8 +280,17 @@ html.light { --card-shadow-hover: 0 14px 34px -12px rgba(15, 23, 42, 0.22); }
    表面：重磨砂在前，折射位移在后（链序=执行序；kube.io 透镜贴图中心平坦=表面不漂移） */
 .card, .glass-bar, .glass-bar-strong { -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate)) brightness(var(--glass-bright)); }
 html .card, html .glass-bar, html .glass-bar-strong { backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate)) brightness(var(--glass-bright)) url(#hw-glass); }
+/* 全域玻璃板：内容区整体一块大玻璃（覆盖率兜底），卡片/弹层浮于其上（嵌套采样）。
+   标准与 -webkit 前缀拆两条规则（选择器不同防构建器合并重写） */
+.glass-sheet { background: var(--glass-sheet-tint); -webkit-backdrop-filter: blur(28px) saturate(1.45); }
+html .glass-sheet { backdrop-filter: blur(28px) saturate(1.45); }
+html.dark { --glass-sheet-tint: rgba(13, 20, 36, 0.3); }
+html.light { --glass-sheet-tint: rgba(255, 255, 255, 0.3); }
+
 /* ---------- 一键关闭液态玻璃（html.glass-off，index.html 防FOUC提前挂类） ---------- */
 html.glass-off body::before { display: none; }
+html.glass-off .glass-sheet { -webkit-backdrop-filter: none; backdrop-filter: none; background: transparent; }
+html.glass-off .card,
 html.glass-off .card,
 html.glass-off .glass-bar,
 html.glass-off .glass-bar-strong,
