@@ -243,10 +243,9 @@ html { --frost: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg
 }
 
 /* ---------- 通用组件类 ---------- */
-/* 液态玻璃卡片（iOS 式）：表面纯净磨砂（backdrop 无噪声位移），折射集中在边缘环
-   （.card::before + 环形 mask 承载强位移滤镜）——透镜效应长在棱上才是真玻璃 */
+/* 液态玻璃卡片（kube.io 透镜贴图法）：重磨砂 + 边框带位移折射（中心平坦表面不漂移），
+   镜面多层描边 + 感光眩光（--mx/--my 由 ui.tsx 写入） */
 .card {
-  position: relative;
   background:
     radial-gradient(340px at var(--mx, 50%) var(--my, -40%), var(--glass-glare), transparent 70%),
     linear-gradient(90deg, var(--refract-l), transparent 12%, transparent 88%, var(--refract-r)),
@@ -281,35 +280,16 @@ html.light { --card-shadow-hover: 0 14px 34px -12px rgba(15, 23, 42, 0.22); }
 .glass-bar, .glass-bar-strong { background: var(--glass-bg); }
 .glass-bar-strong { --glass-blur: 48px; background: var(--glass-strong); }
 /* backdrop-filter 标准与 -webkit 前缀分两条规则声明（选择器不同防止构建器合并重写）。
-   表面：纯净重磨砂（无噪声位移，iOS 式干净）；折射由 ::before 边缘环承载 */
+   表面：重磨砂在前，折射位移在后（链序=执行序；kube.io 透镜贴图中心平坦=表面不漂移） */
 .card, .glass-bar, .glass-bar-strong { -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate)) brightness(var(--glass-bright)); }
-html .card, html .glass-bar, html .glass-bar-strong { backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate)) brightness(var(--glass-bright)); }
-
-/* 边缘折射环：环带内强位移+轻模糊（棱上透镜），表面不参与——真实玻璃的弯折发生在棱边 */
-.card, .glass-bar, .glass-bar-strong { position: relative; }
-.card::before, .glass-bar::before, .glass-bar-strong::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  padding: 14px;                      /* 环带厚度 */
-  pointer-events: none;
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
-  -webkit-backdrop-filter: url(#hw-glass) blur(6px) saturate(1.4);
-  backdrop-filter: url(#hw-glass) blur(6px) saturate(1.4);
-}
+html .card, html .glass-bar, html .glass-bar-strong { backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate)) brightness(var(--glass-bright)) url(#hw-glass); }
 /* ---------- 一键关闭液态玻璃（html.glass-off，index.html 防FOUC提前挂类） ---------- */
 html.glass-off body::before { display: none; }
-html.glass-off .card::before, html.glass-off .glass-bar::before,
-html.glass-off .glass-bar-strong::before { display: none; }
 html.glass-off .card,
 html.glass-off .glass-bar,
 html.glass-off .glass-bar-strong,
 html.glass-off .inset,
-html.glass-off .input,
-html.glass-off .card::before {
+html.glass-off .input {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
