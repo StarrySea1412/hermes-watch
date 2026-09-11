@@ -15,7 +15,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: 安装依赖
-        run: pip install fastapi "uvicorn[standard]" asyncssh httpx cryptography ruff
+        run: pip install fastapi "uvicorn[standard]" asyncssh httpx cryptography "ruff==0.15.12"
       - name: Lint（ruff）
         working-directory: backend
         run: ruff check app run_tests.py
