@@ -4,7 +4,7 @@ Lets Claude Desktop / Cursor / any MCP client query the fleet's live inspection
 data with local tool calls — "AI not locked in the cloud", Netdata-style. The
 toolset is strictly read-only.
 """
-from . import analysis, db
+from . import analysis, badge, db
 
 MCP_PROTOCOL_VERSION = "2025-06-18"
 
@@ -47,8 +47,34 @@ TOOLS = [
         },
     },
     {
+        "name": "host_extras",
+        "description": "获取某台主机的扩展采集面：容器清单（docker ps）、LISTEN 端口、失败服务、最近登录、证书剩余天数",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"host_id": {"type": "integer", "description": "主机 ID"}},
+            "required": ["host_id"],
+        },
+    },
+    {
+        "name": "list_probes",
+        "description": "列出服务拨测目标：URL/TCP/DNS/Push 四类，含当前状态、最近延迟与 24h 可用率",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "probe_history",
+        "description": "获取某条拨测目标最近的心跳记录（时间/状态/延迟/错误）",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "probe_id": {"type": "integer", "description": "拨测 ID"},
+                "limit": {"type": "integer", "description": "条数上限，默认 30", "default": 30},
+            },
+            "required": ["probe_id"],
+        },
+    },
+    {
         "name": "recent_events",
-        "description": "巡检事件流（发现/诊断/提案/报告/错误）",
+        "description": "巡检事件流（发现/诊断/提案/报告/拨测/错误）",
         "inputSchema": {
             "type": "object",
             "properties": {"limit": {"type": "integer", "default": 20}},
@@ -130,6 +156,65 @@ def call_tool(name: str, args: dict) -> dict:
             f"net_in={r['net_in']:.0f} net_out={r['net_out']:.0f} load={r['load1']}"
             for r in sampled))
 
+    if name == "host_extras":
+        hid = int(args.get("host_id", 0))
+        h = db.query_one("SELECT id,name FROM hosts WHERE id=?", (hid,))
+        if not h:
+            return _text(f"主机 #{hid} 不存在。")
+        ex = db.uj(db.query_one("SELECT last_extras FROM hosts WHERE id=?", (hid,))["last_extras"], {}) or {}
+        parts = [f"主机 #{hid} {h['name']} 扩展采集面:"]
+        cons = ex.get("docker_containers") or []
+        if cons:
+            parts.append(f"容器（{len(cons)}）:")
+            for c in cons[:20]:
+                parts.append(f"  - {c.get('name')} [{c.get('state')}] {c.get('status')} ({c.get('image')})")
+        else:
+            parts.append("容器: 无（未装 docker 或未上报）")
+        ports = ex.get("ports") or []
+        parts.append(f"LISTEN 端口（{len(ports)}）: " + ", ".join(
+            f"{x.get('port')}{('/' + x['proc']) if x.get('proc') else ''}" for x in ports[:20]) if ports else "LISTEN 端口: 无")
+        failed = ex.get("failed_services") or []
+        parts.append(("失败服务: " + ", ".join(failed)) if failed else "失败服务: 无")
+        logins = ex.get("logins") or []
+        if logins:
+            parts.append("最近登录: " + "; ".join(
+                f"{x.get('user')}@{x.get('ip')} {x.get('when')}" for x in logins[:6]))
+        if ex.get("cert_days_left") is not None:
+            parts.append(f"证书剩余: {ex['cert_days_left']} 天")
+        if ex.get("top_proc"):
+            parts.append(f"最耗内存进程: {ex['top_proc']}")
+        return _text("\n".join(parts))
+
+    if name == "list_probes":
+        rows = db.query("SELECT * FROM probes ORDER BY id")
+        if not rows:
+            return _text("没有拨测目标。")
+        lines = [f"拨测目标（{len(rows)}）:"]
+        for p in rows:
+            up = "UP" if p["up"] == 1 else "DOWN"
+            pct = badge.uptime24(p["id"])
+            uptime = f", 24h {pct:.1f}%" if pct is not None else ""
+            lat = f"{round(p['last_latency'])}ms" if p["last_latency"] is not None else "—"
+            lines.append(f"- [#{p['id']}] {p['name']} ({p['kind'].upper()} {p['target']}): "
+                         f"{up}, 最近 {lat}{uptime}")
+        return _text("\n".join(lines))
+
+    if name == "probe_history":
+        pid = int(args.get("probe_id", 0))
+        limit = min(100, int(args.get("limit", 30)))
+        p = db.query_one("SELECT id,name,kind,target FROM probes WHERE id=?", (pid,))
+        if not p:
+            return _text(f"拨测 #{pid} 不存在。")
+        rows = db.query("SELECT ts,up,latency,error FROM probe_log WHERE probe_id=? ORDER BY ts DESC LIMIT ?",
+                        (pid, limit))
+        if not rows:
+            return _text(f"拨测 #{pid}（{p['name']}）暂无心跳记录。")
+        return _text(f"拨测 #{pid}（{p['name']}, {p['kind'].upper()} {p['target']}）最近 {len(rows)} 次心跳:\n" + "\n".join(
+            f"{r['ts']:.0f} {'UP' if r['up'] else 'DOWN'}" +
+            (f" {round(r['latency'])}ms" if r["latency"] is not None else "") +
+            (f" — {r['error']}" if r["error"] else "")
+            for r in rows))
+
     if name == "recent_events":
         limit = min(100, int(args.get("limit", 20)))
         rows = db.query(
@@ -149,7 +234,7 @@ def handle(body: dict) -> dict:
         return {"jsonrpc": "2.0", "id": mid, "result": {
             "protocolVersion": MCP_PROTOCOL_VERSION,
             "capabilities": {"tools": {}},
-            "serverInfo": {"name": "hermes-watch", "version": "0.2.0"}}}
+            "serverInfo": {"name": "hermes-watch", "version": "0.4.0"}}}
     if method == "notifications/initialized":
         return {"jsonrpc": "2.0", "result": {}}
     if method == "ping":

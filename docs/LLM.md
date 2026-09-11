@@ -81,7 +81,9 @@ py backend/mock_llm.py      # 127.0.0.1:18777
 ## 4. 与「本地 MCP 端点」的区别
 
 `/api/mcp` 是给 Claude Desktop / Cursor 等 MCP 客户端**读取巡检数据**的只读通道
-（5 个工具直查 SQLite），方向相反：不是本平台调用 LLM，而是外部 LLM 客户端来查数据。
+（8 个工具直查 SQLite：fleet_status / list_findings / get_finding / host_history /
+host_extras（容器·端口·失败服务）/ list_probes / probe_history / recent_events），
+方向相反：不是本平台调用 LLM，而是外部 LLM 客户端来查数据。
 它不受 `ai_outbound` 开关影响。
 
 ## 5. 调用安全铁律（代码里的硬约束）

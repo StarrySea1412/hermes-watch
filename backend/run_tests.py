@@ -611,6 +611,46 @@ def t_badge():
         db.execute("DELETE FROM settings WHERE key='status_token'")
 
 
+def t_mcp_tools():
+    print("[mcp-tools]")
+    from app import mcp_server
+    # 工具注册表：新维度都在
+    names = {x["name"] for x in mcp_server.TOOLS}
+    check("工具清单含拨测与主机 extras", {"list_probes", "probe_history", "host_extras"} <= names)
+    # 协议层
+    r = mcp_server.handle({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
+    check("initialize 握手", r["result"]["serverInfo"]["name"] == "hermes-watch")
+    check("tools/list 数量一致", len(mcp_server.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})["result"]["tools"]) == len(mcp_server.TOOLS))
+
+    # host_extras：造一颗带 extras 的临时主机（容器/端口/失败服务）
+    hid = db.execute(
+        "INSERT INTO hosts(name,hostname,group_name,mock,created_at,last_extras) "
+        "VALUES('__t_mcp__','x','t',1,?,?)",
+        (db.now(), db.j({"docker_containers": [
+                             {"name": "db", "state": "exited", "status": "Exited (137)", "image": "postgres:16"},
+                             {"name": "web", "state": "running", "status": "Up 3 days", "image": "nginx"}],
+                         "ports": [{"port": 22, "addr": "0.0.0.0", "proc": "sshd"},
+                                   {"port": 8080, "addr": "0.0.0.0", "proc": ""}],
+                         "failed_services": ["nginx.service"], "cert_days_left": 21})))
+    out = mcp_server.call_tool("host_extras", {"host_id": hid})["content"][0]["text"]
+    check("extras 含容器状态与端口", "db [exited]" in out and "8080" in out and "nginx.service" in out)
+    check("extras 含证书天数", "21 天" in out)
+    check("不存在主机给提示", "不存在" in mcp_server.call_tool("host_extras", {"host_id": 999999})["content"][0]["text"])
+    db.execute("DELETE FROM hosts WHERE id=?", (hid,))
+
+    # list_probes / probe_history：借演示库现状断言（库无关：有目标必有行，无则给空提示）
+    out2 = mcp_server.call_tool("list_probes", {})["content"][0]["text"]
+    total = len(db.query("SELECT id FROM probes"))
+    check("list_probes 行数一致", (out2.strip().startswith("没有") and total == 0)
+          or f"（{total}）" in out2)
+    miss = mcp_server.call_tool("probe_history", {"probe_id": 999999})["content"][0]["text"]
+    check("probe_history 不存在给提示", "不存在" in miss)
+    any_p = db.query_one("SELECT id FROM probes LIMIT 1")
+    if any_p:
+        out3 = mcp_server.call_tool("probe_history", {"probe_id": any_p["id"]})["content"][0]["text"]
+        check("probe_history 输出心跳行", "心跳" in out3)
+
+
 def t_tofu():
     print("[tofu]")
     from app import ssh
@@ -728,6 +768,7 @@ if __name__ == "__main__":
     t_probes()
     t_probe_dns_push()
     t_badge()
+    t_mcp_tools()
     t_tofu()
     t_ack_and_silence()
     t_rbac()
