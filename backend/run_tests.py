@@ -523,6 +523,55 @@ def t_probes():
         db.execute("DELETE FROM settings WHERE key='hw_lang'")
 
 
+def t_probe_real_parallel():
+    print("[probe-real]")
+    from types import SimpleNamespace
+    from app import collector, ssh
+
+    class FakeSSHConn:
+        def __init__(self):
+            self.times = []
+
+        async def run(self, cmd, check=False):
+            t0 = time.monotonic()
+            await asyncio.sleep(0.05)
+            r = SimpleNamespace(stdout="")
+            key = next((k for k, c in collector.DETAIL_PROBES.items() if c == cmd), None)
+            if key == "cert":
+                raise FileNotFoundError("openssl missing")  # 单探针失败不拖垮采集
+            r.stdout = {
+                "top_proc": "python3 50.0\n",
+                "failed_services": "nginx.service\n",
+                "ports": 'LISTEN 0 128 0.0.0.0:22 0.0.0.0:* users:(("sshd",pid=1,fd=3))',
+                "docker": "db|exited|Exited (137) 2h ago|postgres:16\n",
+            }.get(key, "cpu=12 mem=34 disk=56 net_in=100 net_out=200 load1=0.5")  # 基础探针/无匹配
+            self.times.append((t0, time.monotonic()))
+            return r
+
+        def close(self):
+            pass
+
+    fake = FakeSSHConn()
+
+    async def fake_connect(host, **kw):
+        return fake
+
+    orig = ssh.connect_async
+    ssh.connect_async = fake_connect
+    try:
+        base, extras = asyncio.run(collector.probe_real({"id": 1, "hostname": "x", "port": 22}))
+        check("基础指标解析", base.get("cpu") == 12 and base.get("net_in") == 100)
+        check("六个 extras 探针并发全解析", extras["top_proc"] == "python3 50.0"
+              and extras["failed_services"] == ["nginx.service"]
+              and extras["docker_containers"][0]["name"] == "db"
+              and extras["ports"][0]["port"] == 22)
+        check("失败探针不拖垮其余（cert 保持 None）", extras["cert_days_left"] is None)
+        span = max(e for _, e in fake.times) - min(s for s, _ in fake.times)
+        check("探针真并发（总耗时远小于串行和）", span < 0.05 * len(fake.times) * 0.7)
+    finally:
+        ssh.connect_async = orig
+
+
 def t_probe_parallel():
     print("[probe-parallel]")
     from app import probes
@@ -932,6 +981,7 @@ if __name__ == "__main__":
     t_backups()
     t_probes()
     t_probe_parallel()
+    t_probe_real_parallel()
     t_probe_dns_push()
     t_badge()
     t_mcp_tools()

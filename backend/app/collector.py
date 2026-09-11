@@ -152,10 +152,17 @@ async def probe_real(host: dict) -> tuple[dict | None, dict]:
         extras: dict = {"failed_services": [], "logins": [], "suspicious_logins": [],
                         "docker_containers": [],
                         "cert_days_left": None, "ports": []}
-        for key in ("top_proc", "failed_services", "logins", "cert", "ports", "docker"):
-            try:  # 精简发行版可能缺 last/openssl 等，单探针缺失不拖垮采集
-                r = await conn.run(DETAIL_PROBES[key], check=True)
+
+        async def _probe(key: str):
+            """单探针失败不拖垮采集（asyncssh 单连接可开并发通道，六探针一波跑）"""
+            try:
+                return key, await conn.run(DETAIL_PROBES[key], check=True)
             except Exception:
+                return key, None
+
+        for key, r in await asyncio.gather(*(_probe(k) for k in
+                                             ("top_proc", "failed_services", "logins", "cert", "ports", "docker"))):
+            if r is None:
                 continue
             if key == "top_proc":
                 extras["top_proc"] = r.stdout.strip()
