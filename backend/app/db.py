@@ -145,6 +145,8 @@ MIGRATIONS = [
     "ALTER TABLE hosts ADD COLUMN bastion_username TEXT DEFAULT ''",
     "ALTER TABLE hosts ADD COLUMN bastion_secret TEXT DEFAULT ''",
     "ALTER TABLE hosts ADD COLUMN bastion_key_fp TEXT DEFAULT ''",
+    # 时间线/事件流按 ts DESC 高频查询，30 天保留期下无索引会全表扫
+    "CREATE INDEX IF NOT EXISTS idx_events ON events(ts)",
 ]
 
 SCHEMA_EXTRA = """

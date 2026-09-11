@@ -67,11 +67,28 @@ async def connect_async(host: dict, timeout: float = 10, **kw) -> asyncssh.SSHCl
     return await asyncio.wait_for(connect(host, **kw), timeout)
 
 
-async def _connect_via_bastion(host: dict, timeout: float, **kw) -> asyncssh.SSHClientConnection:
-    """堡垒机（跳板）链式连接：先 SSH 到跳板，再经其 direct-tcpip 隧道连目标。
+# ---------------------------------------------------------------- 堡垒机隧道
 
-    TOFU 各自独立：跳板指纹写 bastion_key_fp、目标写 host_key_fp（防中间人两台都要防）；
-    目标连接关闭时自动回收跳板连接——每轮采集/每条终端会话共用一次握手，不泄漏隧道。"""
+# 跳板连接缓存：同跳板的 N 台主机共享一次握手（每轮 2N 次 SSH 握手 → N+1）
+_bastions: dict[tuple, asyncssh.SSHClientConnection] = {}
+
+
+def _bastion_key(host: dict) -> tuple:
+    return (host["bastion_host"], host.get("bastion_port") or 22,
+            host.get("bastion_username") or "root", host.get("bastion_secret") or "")
+
+
+def _conn_alive(conn) -> bool:
+    """transport 未关闭即视为可用（asyncssh 未暴露公开判定，读私有 transport）。"""
+    tr = getattr(conn, "_transport", None)
+    return tr is not None and not tr.is_closing()
+
+
+async def _bastion_get(host: dict, timeout: float, key: tuple):
+    """取（或建立）跳板连接；缓存里的死连接自动重建。"""
+    conn = _bastions.get(key)
+    if conn is not None and _conn_alive(conn):
+        return conn
     brow = {"id": host.get("id"),
             "hostname": host["bastion_host"],
             "port": host.get("bastion_port") or 22,
@@ -79,23 +96,35 @@ async def _connect_via_bastion(host: dict, timeout: float, **kw) -> asyncssh.SSH
             "secret": host.get("bastion_secret"),
             "host_key_fp": host.get("bastion_key_fp") or "",
             "_fp_col": "bastion_key_fp"}
-    bconn = await asyncio.wait_for(connect(brow), timeout)
-    try:
-        tconn = await asyncio.wait_for(connect(host, tunnel=bconn, **kw), timeout)
-    except Exception:
-        bconn.close()  # 目标连不上也要回收跳板，不留半开隧道
-        raise
-    asyncio.create_task(_chain_close(bconn, tconn))
-    return tconn
+    conn = await asyncio.wait_for(connect(brow), timeout)
+    _bastions[key] = conn
+    asyncio.create_task(_bastion_reaper(key, conn))
+    return conn
 
 
-async def _chain_close(bconn, tconn) -> None:
-    """目标连接关闭后回收跳板连接。"""
+async def _bastion_reaper(key: tuple, conn) -> None:
+    """跳板连接关闭（任何原因）→ 从缓存摘除，下次访问自动重建。"""
     try:
-        await tconn.wait()
+        await conn.wait()
     except Exception:
         pass
-    try:
-        bconn.close()
-    except Exception:
-        pass
+    if _bastions.get(key) is conn:
+        _bastions.pop(key, None)
+
+
+async def _connect_via_bastion(host: dict, timeout: float, **kw) -> asyncssh.SSHClientConnection:
+    """堡垒机链式连接：目标连接经跳板 direct-tcpip 隧道建立。
+
+    TOFU 各自独立（跳板 bastion_key_fp / 目标 host_key_fp）；隧道打开失败且
+    跳板已死时重建一次再试（目标侧原因如口令错误则直接抛，不白握跳板手）。"""
+    key = _bastion_key(host)
+    for attempt in (1, 2):
+        bconn = await _bastion_get(host, timeout, key=key)
+        try:
+            return await asyncio.wait_for(connect(host, tunnel=bconn, **kw), timeout)
+        except Exception as e:
+            alive = _conn_alive(bconn)
+            if not alive:
+                _bastions.pop(key, None)
+            if attempt == 2 or alive:
+                raise e

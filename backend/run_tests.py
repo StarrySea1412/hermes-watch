@@ -667,15 +667,25 @@ def t_bastion():
     print("[bastion]")
     from app import ssh
 
+    class FakeTr:
+        def __init__(self, closing=False):
+            self._closing = closing
+
+        def is_closing(self):
+            return self._closing
+
     class FakeConn:
-        def __init__(self, label):
+        def __init__(self, label, dead=False):
             self.label, self.tunnel, self.closed = label, None, False
+            self._transport = FakeTr(dead)
 
         async def wait(self):
-            pass
+            # 真实活连接的 wait() 会阻塞到关闭；立即返回会让 reaper 误摘缓存
+            await asyncio.Event().wait()
 
         def close(self):
             self.closed = True
+            self._transport._closing = True
 
     conns = []
 
@@ -701,6 +711,8 @@ def t_bastion():
         conns.clear()
 
         # ② 堡垒机主机：先连跳板再隧道连目标
+        ssh._bastions.clear()
+        conns.clear()
         hid = db.execute(
             "INSERT INTO hosts(name,hostname,port,username,secret,group_name,mock,created_at,"
             "bastion_host,bastion_port,bastion_username,bastion_key_fp) "
@@ -711,7 +723,11 @@ def t_bastion():
         check("跳板先连、目标后连且经其隧道",
               len(conns) == 2 and conns[0].label == "jump.corp"
               and conns[1].label == "10.0.0.9" and conns[1].tunnel is conns[0])
-        # ③ 跳板 TOFU 指纹写独立列，不污染目标机指纹
+        # ③ 跳板连接池：第二轮复用跳板（不再握手），隧道挂同一条
+        conn = asyncio.run(ssh.connect_async(h))
+        check("第二轮复用缓存跳板",
+              len(conns) == 3 and conns[2].tunnel is conns[0])
+        # ④ 跳板 TOFU 指纹写独立列，不污染目标机指纹
         class K:
             def get_fingerprint(self, algo="sha256"):
                 return "SHA256:JUMPKEY"
@@ -722,28 +738,48 @@ def t_bastion():
               and db.query_one("SELECT bastion_key_fp FROM hosts WHERE id=?", (hid,))["bastion_key_fp"] == "SHA256:JUMPKEY")
         check("目标机指纹列未被污染",
               db.query_one("SELECT host_key_fp FROM hosts WHERE id=?", (hid,))["host_key_fp"] == "")
-        # ④ 目标连接关闭 → 自动回收跳板
-        asyncio.run(ssh._chain_close(conns[0], conns[1]))
-        check("目标关闭后回收跳板连接", conns[0].closed)
-        # ⑤ 目标连不上时跳板也要回收（不泄漏半开隧道）
+        # ⑤ 目标失败且跳板仍活：不白握跳板手，直接抛
         conns.clear()
+        ssh._bastions.clear()
 
-        async def fail_target(host_, port=None, tunnel=None, **kw):
+        async def fail_target_alive(host_, port=None, tunnel=None, **kw):
             if tunnel is not None:
-                raise OSError("target unreachable")
+                raise OSError("bad target password")
             c = FakeConn("bastion")
             conns.append(c)
             return c
 
-        ssh.asyncssh.connect = fail_target
+        ssh.asyncssh.connect = fail_target_alive
         try:
             asyncio.run(ssh.connect_async(h))
             check("目标失败应抛错", False)
         except OSError:
             check("目标失败向上抛错", True)
-        check("目标失败仍回收跳板", len(conns) == 1 and conns[0].closed)
+        check("跳板存活时不重复握手", len(conns) == 1)
+        # ⑥ 跳板已死：丢弃缓存重建一次再试
+        ssh._bastions.clear()
+        conns.clear()
+        state = {"attempt": 0}
+
+        async def dead_bastion(host_, port=None, tunnel=None, **kw):
+            state["attempt"] += 1
+            if tunnel is None:  # 跳板连接：第 1 次建死跳板，第 2 次建活跳板
+                c = FakeConn("bastion", dead=(state["attempt"] == 1))
+                conns.append(c)
+                return c
+            if state["attempt"] == 2:  # 目标连接跑在死跳板上 → 失败
+                raise OSError("tunnel on dead bastion")
+            c = FakeConn("target")
+            c.tunnel = tunnel
+            conns.append(c)
+            return c
+
+        ssh.asyncssh.connect = dead_bastion
+        conn = asyncio.run(ssh.connect_async(h))
+        check("死跳板自动重建并连上目标",
+              len(conns) == 3 and conn.tunnel is conns[1] and conn.label == "target")
         db.execute("DELETE FROM hosts WHERE id=?", (hid,))
-        # ⑥ 跳板口令加密回环（与主机口令同机制）
+        # ⑦ 跳板口令加密回环（与主机口令同机制）
         from app import secrets as sec
         enc = sec.encrypt("jump-pw")
         check("跳板口令加密回环", sec.decrypt(enc) == "jump-pw")
