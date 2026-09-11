@@ -217,7 +217,8 @@ async def analyze(fid: int):
         # Aurora Actions 式「诊断后留档」：crit 诊断完成且开关开启 → 自动生成一份诊断时点报告
         _ron = (db.query_one("SELECT value FROM settings WHERE key='report_on_diag'") or {}).get("value")
         if _ron == "on":
-            r = reports.generate("diag")
+            # HTML 渲染是 CPU 密集：丢线程池跑，别在事件循环上卡住整个面板
+            r = await asyncio.to_thread(reports.generate, "diag")
             await broadcast("report", i18n.t(f"诊断触发自动报告 #{r['id']}（整体 {r['overall']} 分）",
                                              f"Diagnosis-triggered report #{r['id']} generated (overall {r['overall']})"),
                             {"report_id": r["id"]})
@@ -311,7 +312,7 @@ def events(limit: int = 80):
 
 @app.post("/api/reports/generate")
 async def gen_report(kind: str = "manual"):
-    r = reports.generate(kind)
+    r = await asyncio.to_thread(reports.generate, kind)  # CPU 密集渲染离线程池
     await broadcast("report", i18n.t(f"健康报告已生成（整体 {r['overall']} 分）",
                                      f"Health report generated (overall score {r['overall']})"), r)
     # AI 摘要异步追加（AI 外发开启时）：报告立即可看，摘要稍后出现在第 06 节

@@ -523,6 +523,35 @@ def t_probes():
         db.execute("DELETE FROM settings WHERE key='hw_lang'")
 
 
+def t_probe_parallel():
+    print("[probe-parallel]")
+    from app import probes
+    db.execute("DELETE FROM probes WHERE name LIKE '__t_par%'")
+    db.execute("DELETE FROM probe_log WHERE probe_id IN (SELECT id FROM probes WHERE name LIKE '__t_par%')")
+    for i in range(2):
+        db.execute(
+            "INSERT INTO probes(name,kind,target,created_at) VALUES(?,?,?,?)",
+            (f"__t_par{i}__", "url", "http://127.0.0.1:1/x", db.now()))  # last_ts 空 → 到期
+    orig = probes.run_probe
+
+    async def fake(p):
+        await asyncio.sleep(0.05)
+        return True, 5.0, ""
+
+    probes.run_probe = fake
+    try:
+        asyncio.run(probes.run_due())
+        rows = db.query("SELECT last_ts FROM probes WHERE name LIKE '__t_par%'")
+        check("到期拨测并发全执行（两条都有新心跳时间）", len(rows) == 2 and all(r["last_ts"] for r in rows))
+        # 再跑一轮：interval 内不到期，n 应为 0（push 清扫也无 push 目标）
+        n = asyncio.run(probes.run_due())
+        check("刚拨过不在到期窗口", n == 0)
+    finally:
+        probes.run_probe = orig
+        db.execute("DELETE FROM probe_log WHERE probe_id IN (SELECT id FROM probes WHERE name LIKE '__t_par%')")
+        db.execute("DELETE FROM probes WHERE name LIKE '__t_par%'")
+
+
 def t_probe_dns_push():
     print("[probe-dns-push]")
     from app import probes
@@ -902,6 +931,7 @@ if __name__ == "__main__":
     t_notify_log()
     t_backups()
     t_probes()
+    t_probe_parallel()
     t_probe_dns_push()
     t_badge()
     t_mcp_tools()

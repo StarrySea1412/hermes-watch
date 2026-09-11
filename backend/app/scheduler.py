@@ -265,7 +265,7 @@ async def _maybe_autoreport():
     if last and db.now() - last["ts"] < minutes * 60:
         return
     from . import reports
-    r = reports.generate("auto")
+    r = await asyncio.to_thread(reports.generate, "auto")  # CPU 密集渲染离线程池
     db.execute("INSERT INTO events(ts,host_id,kind,message,data) VALUES(?,NULL,'report',?,?)",
                (db.now(), i18n.t(f"定时报告已生成（每 {minutes} 分钟），整体 {r['overall']} 分",
                                  f"Scheduled report generated (every {minutes} min), overall score {r['overall']}"),

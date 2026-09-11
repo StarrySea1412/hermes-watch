@@ -380,23 +380,32 @@ async def sweep_push() -> int:
 
 # ---------------------------------------------------------------- 调度
 
-async def run_due() -> int:
-    """跑一轮：push 型只做超时清扫（不轮询），其余按到期轮询拨测。
+# 拨测并发上限：一串 10s 超时目标串行会拖住整轮（目标多了跑不过拨测周期）
+DIAL_SEMA = asyncio.Semaphore(8)
 
-    每条可用 interval_s 覆盖全局 probe_interval（0=用全局）。"""
+
+async def run_due() -> int:
+    """跑一轮：push 型只做超时清扫（不轮询），其余到期目标并发拨测。
+
+    每条可用 interval_s 覆盖全局 probe_interval（0=用全局）；
+    单目标异常不拖垮同轮其他目标（gather 隔离）。"""
     global_interval = _setting_int("probe_interval", 30, minimum=15)
-    n = 0
+    due = []
     for p in db.query("SELECT * FROM probes"):
         if p["kind"] == "push":
             continue
         interval = max(15, int(p["interval_s"] or 0)) or global_interval
         if (p["last_ts"] or 0) + interval > db.now() + 0.5:
             continue
-        ok, latency, error = await run_probe(p)
+        due.append(dict(p))
+
+    async def _one(p: dict) -> None:
+        async with DIAL_SEMA:
+            ok, latency, error = await run_probe(p)
         await handle_result(p, ok, latency, error)
-        n += 1
-    n += await sweep_push()
-    return n
+
+    await asyncio.gather(*(_one(p) for p in due), return_exceptions=True)
+    return len(due) + await sweep_push()
 
 
 async def loop():
