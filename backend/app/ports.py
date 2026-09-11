@@ -9,7 +9,7 @@
 """
 import json
 
-from . import db, i18n, rules
+from . import db, i18n
 
 BASELINE_PREFIX = "ports_baseline:"
 

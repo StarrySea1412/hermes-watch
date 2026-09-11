@@ -192,17 +192,16 @@ def generate(kind: str = "manual") -> dict:
             if f["type"] in reco_table:
                 recos.append((f["host"], f["title"], reco_table[f["type"]]))
 
-        l = latest or {}
+        latest = latest or {}
         st_color, st_label = _verdict(score, _report_lang())
-        ov_color = "#22c55e" if score >= 90 else ("#f59e0b" if score >= 70 else "#ef4444")
         overview_rows.append(
             f"<tr><td><b>{html.escape(h['name'])}</b></td>"
             f"<td>{html.escape(h['group_name'] or 'default')}</td>"
             f"<td><b class='{_score_cls(score)}'>{score}</b></td>"
             f"<td style='color:{st_color}'>{st_label}</td>"
-            f"<td>{_pct(l.get('cpu') if l else None)}</td>"
-            f"<td>{_pct(l.get('mem') if l else None)}</td>"
-            f"<td>{_pct(l.get('disk') if l else None)}</td>"
+            f"<td>{_pct(latest.get('cpu') if latest else None)}</td>"
+            f"<td>{_pct(latest.get('mem') if latest else None)}</td>"
+            f"<td>{_pct(latest.get('disk') if latest else None)}</td>"
             f"<td>{len(fs) or '—'}</td></tr>")
 
         def bar(label, v, color):
@@ -214,12 +213,12 @@ def generate(kind: str = "manual") -> dict:
                     f'<b class="{"hot" if warn else ""}">{v:.0f}%</b></div>')
 
         metrics = "".join([
-            bar("CPU", l.get("cpu"), "#0ea5e9"),
-            bar(L["mem"], l.get("mem"), "#8b5cf6"),
-            bar(L["disk"], l.get("disk"), "#f59e0b"),
+            bar("CPU", latest.get("cpu"), "#0ea5e9"),
+            bar(L["mem"], latest.get("mem"), "#8b5cf6"),
+            bar(L["disk"], latest.get("disk"), "#f59e0b"),
             (f'<div class="metric"><span>{L["load"]}</span><div class="bar"><i style="width:'
-             f'{min(100, (l.get("load1") or 0) / 8 * 100):.0f}%;background:#10b981"></i></div>'
-             f'<b>{(l.get("load1") or 0):.2f}</b></div>') if l else "",
+             f'{min(100, (latest.get("load1") or 0) / 8 * 100):.0f}%;background:#10b981"></i></div>'
+             f'<b>{(latest.get("load1") or 0):.2f}</b></div>') if latest else "",
         ])
 
         rows = db.query("SELECT disk FROM metrics WHERE host_id=? ORDER BY ts", (h["id"],))
@@ -507,7 +506,7 @@ def render_status_page(snap: dict) -> str:
                     "crit": (i18n.t("需要处置", "Needs action"), "#ef4444"), "offline": (i18n.t("离线", "Offline"), "#94a3b8")}
     cards = []
     for h in hosts:
-        l = h.get("latest") or {}
+        latest = h.get("latest") or {}
         label, c = STATUS_LABEL.get(h["status"], STATUS_LABEL["ok"])
         up = h.get("uptime")
         def _bar(v, name, css_name):
@@ -525,7 +524,7 @@ def render_status_page(snap: dict) -> str:
         <div class="hrow"><b>{html.escape(h['name'])}</b>{up_html}
           <span class="chip" style="color:{c};border-color:{c}55;background:{c}18">{label}</span>
           <span class="score" style="color:{c}">{h['score']}</span></div>
-        {_bar(l.get('cpu'), M_CPU, 'cpu')}{_bar(l.get('mem'), M_MEM, 'mem')}{_bar(l.get('disk'), M_DISK, 'disk')}
+        {_bar(latest.get('cpu'), M_CPU, 'cpu')}{_bar(latest.get('mem'), M_MEM, 'mem')}{_bar(latest.get('disk'), M_DISK, 'disk')}
       </div>""")
 
     fs = db.query(

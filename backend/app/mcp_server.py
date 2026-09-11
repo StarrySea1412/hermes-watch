@@ -96,11 +96,11 @@ def call_tool(name: str, args: dict) -> dict:
         snap = analysis.fleet_snapshot()
         lines = [f"Fleet 状态（{snap['generated_at']:.0f}）:"]
         for h in snap["hosts"]:
-            l = h.get("latest") or {}
+            latest = h.get("latest") or {}
             lines.append(
                 f"- [{h['id']}] {h['name']} ({h['hostname']}, 组 {h['group']}): "
-                f"健康 {h['score']}/{h['status']}, CPU {l.get('cpu', 0):.0f}%, "
-                f"内存 {l.get('mem', 0):.0f}%, 磁盘 {l.get('disk', 0):.0f}%, "
+                f"健康 {h['score']}/{h['status']}, CPU {latest.get('cpu', 0):.0f}%, "
+                f"内存 {latest.get('mem', 0):.0f}%, 磁盘 {latest.get('disk', 0):.0f}%, "
                 f"发现 {h['open_findings']} 条")
         return _text("\n".join(lines))
 

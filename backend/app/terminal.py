@@ -8,7 +8,6 @@
 """
 import asyncio
 
-from . import db
 
 try:
     import asyncssh

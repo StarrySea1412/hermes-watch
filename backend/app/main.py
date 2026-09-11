@@ -13,7 +13,7 @@ from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSoc
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
-from . import agent, analysis, auth, backups, badge, ccswitch, db, executor, i18n, mcp_server, notify, ports, probes, reports, rules, scheduler, seed, secrets, terminal
+from . import agent, analysis, auth, backups, badge, ccswitch, db, executor, i18n, mcp_server, notify, ports, probes, reports, scheduler, seed, secrets, terminal
 
 # 前端经 vite 代理（生产同源部署）访问 /api，浏览器永远同源 —— 不开 CORS 面
 

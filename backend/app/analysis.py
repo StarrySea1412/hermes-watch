@@ -29,7 +29,7 @@ DEEP_DIVE = {
     "memory": [("定位高内存进程", "Locate top-memory processes"), MEM_PROBE],
     "login": [("审计登录记录", "Audit login records"), LOGIN_PROBE],
     "service": [("查看失败详情", "Inspect failure details"),
-                "systemctl status {service} --no-pager -l | head -20"],
+                "systemctl status {service} --no-pager -latest | head -20"],
     "container": [("查看容器详情", "Inspect container details"),
                   "docker inspect {name} --format '{{.State.ExitCode}} {{.State.Error}} {{.RestartCount}}' 2>/dev/null | head -5"],
 }
@@ -268,10 +268,10 @@ def build_fleet_context(mapping: dict[str, str] | None = None) -> str:
     snap = fleet_snapshot()
     lines = []
     for h in snap["hosts"]:
-        l = h.get("latest") or {}
+        latest = h.get("latest") or {}
         lines.append(
             f"- {h['name']} ({h['hostname']}, 组 {h['group']}): 健康 {h['score']}, 状态 {h['status']}, "
-            f"CPU {l.get('cpu', 0):.0f}%, 内存 {l.get('mem', 0):.0f}%, 磁盘 {l.get('disk', 0):.0f}%, "
+            f"CPU {latest.get('cpu', 0):.0f}%, 内存 {latest.get('mem', 0):.0f}%, 磁盘 {latest.get('disk', 0):.0f}%, "
             f"发现 {h['open_findings']} 条")
     fs = top_findings(8)
     if fs:

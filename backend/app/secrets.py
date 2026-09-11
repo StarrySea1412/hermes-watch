@@ -6,7 +6,6 @@
 """
 import base64
 import os
-import pathlib
 
 from .db import _DATA_DIR
 

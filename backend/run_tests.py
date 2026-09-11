@@ -121,7 +121,8 @@ def t_auth():
     check("会话签发/校验", auth.verify_session(s))
     check("篡改会话拒绝", not auth.verify_session(s[:-4] + "0000"))
     exp = f"{int(time.time()) - 10}."
-    import hashlib as _h, hmac as _hm
+    import hashlib as _h
+    import hmac as _hm
     bad = exp + _hm.new(auth._hmac_key(), exp.encode(), _h.sha256).hexdigest()
     check("过期会话拒绝", not auth.verify_session(bad))
     check("随机串拒绝", not auth.verify_session("garbage"))
@@ -132,9 +133,8 @@ def t_agent_sig():
     token = "hw_testtoken"
     body = b'{"cpu": 1}'
     ts = str(int(time.time()))
-    mac_base = token.encode() + body + ts.encode()
-    good = __import__("hashlib").sha256  # noqa: 与后端同构
-    import hashlib as _h, hmac as _hm
+    import hashlib as _h
+    import hmac as _hm
     sig = _hm.new(token.encode(), body + ts.encode(), _h.sha256).hexdigest()
     check("有效签名通过", agent.verify_signature(token, body, ts, sig))
     check("篡改签名拒绝", not agent.verify_signature(token, body, ts, "0" * 64))
@@ -277,7 +277,6 @@ def t_quiet_hours():
     check("非法格式不命中", not notify.in_quiet_hours("abc"))
     check("超界小时不命中", not notify.in_quiet_hours("25:00-08:00"))
     # 注入固定时刻验证窗口判定（monkeypatch datetime 模块内的 now 引用不可行，直接测纯逻辑）
-    import datetime as _dt
     cases = [
         # (spec, 当前时分, 期望)
         ("23:00-08:00", 23 * 60 + 30, True),
@@ -351,7 +350,6 @@ def t_notify_log():
 
 def t_backups():
     print("[backups]")
-    import os
     import sqlite3
     import tempfile
     from pathlib import Path
@@ -381,10 +379,16 @@ def t_backups():
         (d / "backups").mkdir()
         bname = "hermes-watch-20260910-000000.db"
         c = sqlite3.connect(d / "backups" / bname)
-        c.execute("CREATE TABLE t(x)"); c.execute("INSERT INTO t VALUES(42)"); c.commit(); c.close()
+        c.execute("CREATE TABLE t(x)")
+        c.execute("INSERT INTO t VALUES(42)")
+        c.commit()
+        c.close()
         target = d / "main.db"
         c2 = sqlite3.connect(target)
-        c2.execute("CREATE TABLE t(x)"); c2.execute("INSERT INTO t VALUES(0)"); c2.commit(); c2.close()
+        c2.execute("CREATE TABLE t(x)")
+        c2.execute("INSERT INTO t VALUES(0)")
+        c2.commit()
+        c2.close()
         (d / ".restore-pending").write_text(bname, encoding="utf-8")
         got = backups.consume_restore_if_pending(data_dir=d, db_path=target)
         con = sqlite3.connect(target)
@@ -401,7 +405,7 @@ def t_backups():
 
 def t_probes():
     print("[probes]")
-    from app import i18n, probes
+    from app import probes
     # 残留免疫：上次中途 crash 可能留下同名行（UNIQUE name），先清
     db.execute("DELETE FROM probes WHERE name='__t_probe__'")
     db.execute("DELETE FROM probe_log WHERE probe_id NOT IN (SELECT id FROM probes)")
@@ -907,8 +911,11 @@ def t_ack_and_silence():
         "INSERT INTO findings(host_id,ts,type,severity,title,detail,evidence) VALUES(?,?,?,?,?,?,?)",
         (hid, db.now() - 1900, "cpu", "crit", "【测试】CPU 100%", "test", "{}"))  # ts 拨回 31 分钟前，越过重发窗口
     from app import scheduler
-    q_rows = lambda: scheduler.db.query(
-        "SELECT id, host_id, type, severity, ts, last_notified, acked_at, title FROM findings WHERE id=?", (fid,))
+
+    def q_rows():
+        return scheduler.db.query(
+            "SELECT id, host_id, type, severity, ts, last_notified, acked_at, title FROM findings WHERE id=?", (fid,))
+
     scheduler._resend_crit("t", q_rows(), {"cpu"})
     last1 = db.query_one("SELECT last_notified FROM findings WHERE id=?", (fid,))["last_notified"]
     check("未确认未静默且超重发窗口 → last_notified 更新", last1 is not None)

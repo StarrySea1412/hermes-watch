@@ -2,7 +2,7 @@
 
 web-1 healthy / db-1 disk filling / app-1 memory leak / cache-1 suspicious login.
 """
-from . import collector, db
+from . import db
 
 DEMO_HOSTS = [
     {"name": "web-1", "hostname": "10.0.0.11", "group_name": "web", "chaos": "busy", "mock": 1},

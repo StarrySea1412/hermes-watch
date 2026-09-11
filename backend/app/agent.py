@@ -8,7 +8,7 @@ import hmac
 import secrets
 import time
 
-from . import db, rules
+from . import db
 
 
 def new_token() -> str:

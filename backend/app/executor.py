@@ -9,7 +9,7 @@ import asyncio
 import re
 import time
 
-from . import db, secrets
+from . import db
 
 # 白名单：每段命令必须整体匹配其中一条，否则拒绝执行
 WHITELIST = [
