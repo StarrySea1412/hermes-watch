@@ -1,7 +1,8 @@
-"""Service probes: URL / TCP dial checks independent of host inspection.
+"""Service probes: URL / TCP / DNS / ICMP dial checks + push heartbeats.
 
 拨测监控（对标 Uptime Kuma 拨测 / Gatus 状态机，补「只管主机不管服务」的维度缺口）：
-- 目标：URL（GET，接受 http/https）或 TCP（host:port 连通）
+- 目标：URL（GET，接受 http/https）、TCP（host:port 连通）、DNS（解析器 + 期望应答）、
+  ICMP（IPv4 echo，Windows IcmpSendEcho / POSIX SOCK_DGRAM，均零特权零依赖）
 - 状态机（Gatus 式双阈值防抖）：
   连续 fail_threshold 次失败 → down；down 中连续 success_threshold 次成功 → up
 - 心跳：probe_log 逐次留痕（up/down + 延迟），前端画 UK 式心跳条
@@ -218,6 +219,92 @@ def dns_check(answers: list[str], expected: str) -> tuple[bool, str]:
     return True, ""
 
 
+# ---------------------------------------------------------------- ICMP 拨测
+
+def _icmp_echo_win(host: str, timeout_s: float) -> tuple[float, str]:
+    """Windows：iphlpapi IcmpSendEcho（非特权进程即可发 ICMP echo）。
+    返回 (rtt_ms, error)；error 为空 = 通。仅 IPv4（域名先 gethostbyname 解析）。"""
+    import ctypes
+    import ctypes.wintypes as wt
+    import socket as _s
+    # 64 位 Python 必须显式定参（默认按 32 位 int 传参，指针会被截断 → access violation）
+    icmp_dll = ctypes.WinDLL("iphlpapi")
+    icmp_dll.IcmpCreateFile.restype = wt.HANDLE
+    icmp_dll.IcmpSendEcho.argtypes = [wt.HANDLE, wt.BOOL, ctypes.c_void_p, wt.WORD,
+                                      ctypes.c_void_p, ctypes.c_void_p,
+                                      wt.DWORD, wt.DWORD]
+    icmp_dll.IcmpSendEcho.restype = wt.DWORD
+    icmp_dll.IcmpCloseHandle.argtypes = [wt.HANDLE]
+    icmp_dll.IcmpCloseHandle.restype = wt.BOOL
+    icmp = icmp_dll.IcmpCreateFile()
+    if not icmp or icmp == wt.HANDLE(-1).value:
+        return 0.0, "IcmpCreateFile failed"
+    try:
+        payload = b"hermes-watch-icmp"
+        reply_buf = ctypes.create_string_buffer(64 + len(payload) + 16)  # ICMP_ECHO_REPLY+数据
+        # IPAddr = ULONG，网络字节序在 LE 机器上的数值 = little 端序读 inet_aton
+        ip_num = int.from_bytes(_s.inet_aton(_s.gethostbyname(host)), "little")
+        replies = icmp_dll.IcmpSendEcho(icmp, ip_num, payload, len(payload),
+                                        None, reply_buf, len(reply_buf),
+                                        int(timeout_s * 1000))
+        if replies:  # 收到应答数>0；ICMP_ECHO_REPLY 布局：Address(4) Status(4) RoundTripTime(4)
+            rtt = int.from_bytes(reply_buf.raw[8:12], "little")
+            return float(rtt), ""
+        return 0.0, "timeout / no echo reply"
+    finally:
+        icmp_dll.IcmpCloseHandle(icmp)
+
+
+async def icmp_probe(target: str, timeout_s: float) -> tuple[float, str]:
+    """ICMP echo 一次 → (rtt_ms, error)。Windows 走 IcmpSendEcho（线程池包一层），
+    POSIX 走 SOCK_DGRAM ICMP（Linux 无 root 也可用，内核替我们匹配 echo reply）。"""
+    if os.name == "nt":
+        return await asyncio.to_thread(_icmp_echo_win, target, timeout_s)
+    import socket as _s
+    import struct
+    started = time.perf_counter()
+
+    def _sync() -> tuple[float, str]:
+        try:
+            s = _s.socket(_s.AF_INET, _s.SOCK_DGRAM, _s.IPPROTO_ICMP)
+        except OSError as e:
+            return 0.0, f"icmp socket unavailable ({e.strerror or e})"
+        try:
+            ident = os.getpid() & 0xFFFF
+            payload = b"hermes-watch-icmp"
+            seq = 1
+
+            def _pkt(hdr_only: bytes) -> bytes:
+                csum = sum(struct.unpack("!%dH" % (len(hdr_only) // 2), hdr_only))
+                csum = (csum >> 16) + (csum & 0xFFFF) + (csum >> 16)
+                return struct.pack("!BBHHH", 8, 0, (~csum) & 0xFFFF, ident, seq) + payload
+
+            s.settimeout(timeout_s)
+            s.sendto(_pkt(struct.pack("!BBHHH", 8, 0, 0, ident, seq)), (target, 0))
+            deadline = time.monotonic() + timeout_s
+            while True:
+                remain = deadline - time.monotonic()
+                if remain <= 0:
+                    return 0.0, "timeout / no echo reply"
+                s.settimeout(remain)
+                data, _addr = s.recvfrom(1024)
+                # SOCK_DGRAM 收到的应答不带 IP 头（内核剥掉）：ICMP 头 8B + 原 payload
+                if len(data) >= 8 + len(payload) and data[0] == 0 \
+                        and data[4:6] == struct.pack("!H", ident) \
+                        and data[6:8] == struct.pack("!H", seq) \
+                        and data[8:8 + len(payload)] == payload:
+                    return (time.perf_counter() - started) * 1000, ""
+        finally:
+            s.close()
+
+    return await asyncio.get_running_loop().run_in_executor(None, _sync)
+
+
+async def _icmp_run(p: dict, timeout_s: float) -> tuple[bool, float | None, str]:
+    rtt, err = await icmp_probe((p["target"] or "").strip(), timeout_s)
+    return (not err), (rtt if not err else None), err
+
+
 async def run_probe(p: dict) -> tuple[bool, float | None, str]:
     """执行一次拨测 → (ok, latency_ms, error)。任何异常都归一为失败，不外抛。
 
@@ -235,6 +322,8 @@ async def run_probe(p: dict) -> tuple[bool, float | None, str]:
             return ok, latency, err
         if p["kind"] == "push":
             return True, None, "push targets are swept, not dialed"  # 不会走到（run_due 已跳过）
+        if p["kind"] == "icmp":
+            return await _icmp_run(p, timeout_s)
         if p["kind"] == "tcp":
             host, _, port = target.rpartition(":")
             if not host or not port.isdigit():

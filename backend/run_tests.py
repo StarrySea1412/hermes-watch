@@ -565,6 +565,17 @@ def t_probes():
     ok3, latency3, err3 = asyncio.run(_tcp_ok())
     check("TCP 连通判成功", ok3 and latency3 and latency3 > 0, err3)
 
+    # ---- ICMP 拨测（真实环回 echo；Windows IcmpSendEcho / POSIX SOCK_DGRAM 双路都覆盖）----
+    ok4, lat4, err4 = asyncio.run(probes.run_probe(
+        {"kind": "icmp", "target": "127.0.0.1", "timeout_s": 2}))
+    check("ICMP 环回通", ok4 and lat4 is not None and lat4 >= 0, err4)
+    ok5, _, err5 = asyncio.run(probes.run_probe(
+        {"kind": "icmp", "target": "127.0.0.1", "timeout_s": 1}))
+    check("ICMP 域名/重复目标可重复", ok5 == ok4, err5)
+    ok6, _, err6 = asyncio.run(probes.run_probe(
+        {"kind": "icmp", "target": "240.0.0.1", "timeout_s": 1}))  # 保留段，必无应答
+    check("ICMP 不可达判失败", not ok6 and err6, err6)
+
     # ---- 条件引擎（url_check 纯函数）----
     p_url = {"keyword": "OK", "max_latency_ms": 300, "cert_days_min": 14}
     c_ok, c_err = probes.url_check(p_url, 200, "body OK here", 120.0, 30)

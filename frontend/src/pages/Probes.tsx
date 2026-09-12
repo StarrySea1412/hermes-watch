@@ -9,7 +9,7 @@ import { Ic } from '../icons'
 // success_threshold 次成功 → up。防抖窗口内显示「观察中 / 恢复中 x/N」徽标。
 
 type Probe = {
-  id: number; name: string; kind: 'url' | 'tcp' | 'dns' | 'push'; target: string
+  id: number; name: string; kind: 'url' | 'tcp' | 'dns' | 'icmp' | 'push'; target: string
   up: 0 | 1; fail_streak: number; succ_streak: number
   fail_threshold: number; success_threshold: number; timeout_s: number
   keyword: string; max_latency_ms: number; cert_days_min: number; interval_s: number
@@ -164,7 +164,7 @@ export default function Probes() {
   const [logs, setLogs] = useState<Record<number, ProbeLog[]>>({})
   const [loadErr, setLoadErr] = useState('')
   const [msg, setMsg] = useState('')
-  const [form, setForm] = useState({ name: '', kind: 'url' as 'url' | 'tcp' | 'dns' | 'push', target: '' })
+  const [form, setForm] = useState({ name: '', kind: 'url' as 'url' | 'tcp' | 'dns' | 'icmp' | 'push', target: '' })
   const [advOpen, setAdvOpen] = useState(false)
   const [adv, setAdv] = useState({
     fail_threshold: '3', success_threshold: '2', timeout_s: '10',
@@ -346,7 +346,7 @@ export default function Probes() {
           <div>
             <div className="text-[11px] text-[var(--text-faint)] mb-1.5">{t('pr.kind')}</div>
             <div className="flex gap-1.5 flex-wrap">
-              {(['url', 'tcp', 'dns', 'push'] as const).map(k => (
+              {(['url', 'tcp', 'dns', 'icmp', 'push'] as const).map(k => (
                 <button key={k} onClick={() => setForm({ ...form, kind: k })}
                   className={`pill ${form.kind === k ? '' : 'text-[var(--text-mute)]'}`}
                   style={form.kind === k ? { background: 'var(--accent-dim)', color: 'var(--accent)' } : { background: 'var(--neutral-bg)' }}>
@@ -360,7 +360,8 @@ export default function Probes() {
             <input className="input mono" value={form.target} disabled={form.kind === 'push'}
               placeholder={form.kind === 'url' ? t('pr.phTargetUrl')
                 : form.kind === 'tcp' ? t('pr.phTargetTcp')
-                  : form.kind === 'dns' ? t('pr.phTargetDns') : '—'}
+                  : form.kind === 'dns' ? t('pr.phTargetDns')
+                : form.kind === 'icmp' ? t('pr.phTargetIcmp') : '—'}
               onChange={e => setForm({ ...form, target: e.target.value })} />
           </div>
           <button className="btn btn-primary justify-center" disabled={adding || !form.name.trim() || (form.kind !== 'push' && !form.target.trim())} onClick={add}>

@@ -472,7 +472,7 @@ async def probe_add(p: ProbeIn):
     target = p.target.strip()
     if not name:
         raise HTTPException(400, i18n.t("名称不能为空", "Name is required"))
-    kind = p.kind if p.kind in ("url", "tcp", "dns", "push") else "url"
+    kind = p.kind if p.kind in ("url", "tcp", "dns", "icmp", "push") else "url"
     if kind != "push" and not target:
         raise HTTPException(400, i18n.t("目标不能为空", "Target is required"))
     if kind == "url" and not target.startswith(("http://", "https://")):

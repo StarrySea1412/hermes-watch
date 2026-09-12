@@ -112,7 +112,7 @@ npm run dev                          # http://localhost:5273
 - [x] 多用户与 RBAC 三级角色（admin 全权 / operator 值班：终端/审批/告警确认/拨测/AI 对话 / observer 只读；users 表 + 角色签名会话 + 按角色过滤导航与 WS 终端；存量单口令兼容自动 admin）
 - [x] 运维两件套：一键安装/升级脚本（install.sh：venv + 前端构建 + 可选 systemd 自启，--update 一键升级，HW_PORT 端口可配）、SQLite 每日自动备份（在线 backup API，保留 10 份；设置页手动备份/恢复——恢复走暂存标记、重启生效，避免运行中换库）
 - [x] 服务拨测（对标 Uptime Kuma 拨测 / Gatus 状态机）：URL / TCP 目标拨测（全局/每目标独立周期），Gatus 式条件引擎（状态码 + 关键词包含 + 响应时间上限 + HTTPS 证书剩余天数）与双阈值防抖（连续失败下线 / 连续成功恢复，阈值可配），48 桶心跳条带图 + 延迟显示，翻转才落事件并外发通知（复用免打扰/留痕），手动「立即拨测」，心跳随指标保留期清理
-- [x] 拨测矩阵补宽：DNS 拨测（纯 stdlib UDP 客户端，六类 RDATA 应答校验）+ Push 心跳（`hw_` token 主动上报 + 容忍窗口防抖）+ 状态徽章 SVG（shields 风 `/badge/{token}.svg`，门禁独立 token 可撤销）；拨测并发化（单连接多探针 gather）
+- [x] 拨测矩阵补宽：DNS 拨测（纯 stdlib UDP 客户端，六类 RDATA 应答校验）+ ICMP 拨测（Windows IcmpSendEcho / POSIX SOCK_DGRAM 双路，零特权零依赖）+ Push 心跳（`hw_` token 主动上报 + 容忍窗口防抖）+ 状态徽章 SVG（shields 风 `/badge/{token}.svg`，门禁独立 token 可撤销）；拨测并发化（单连接多探针 gather）
 - [x] 堡垒机链式 SSH（跳板 → 目标机两跳隧道 + 同跳板连接池共享，握手 2N→N+1）+ SSH TOFU 人工确认（首连指纹拦截、变更需采纳制，跳板自动 TOFU）+ 端口基线（LISTEN 端口漂移对比告警）
 - [x] 健康分 v2（类型化权重：安全类重、性能类轻，同型发现 0.5^n 指数衰减）+ 告警聚合（同轮同主机 crit 合并通知）+ 公开端点限流与访问审计 + 通知模板自定义（`{var}` 渲染，四调用点）
 - [x] AI 对话 agentic 工具循环（对话页 LLM 自动调用与 MCP 同源的只读工具查实时数据，最多 3 轮；思考链与工具调用 SSE 透传、前端默认折叠展示；不支持 function calling 的端点自动退回纯对话）
