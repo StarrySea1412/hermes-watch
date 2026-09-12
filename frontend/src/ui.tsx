@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { createContext, useContext, useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useTheme } from 'next-themes'
 import { subscribe } from './api'
@@ -68,22 +68,34 @@ export function GlassToggle() {
   )
 }
 
+/* ============ 角色门禁 ============ */
+export type Role = 'admin' | 'operator' | 'observer'
+// 访问控制未开启（单人本机模式）等效 admin，由 App.Gate 折算后写入
+export const RoleCtx = createContext<Role>('admin')
+export const useRole = () => useContext(RoleCtx)
+
 /* ============ 布局 ============ */
-const NAV: { to: string; icon: IconName; key: string; end?: boolean }[] = [
+const NAV: { to: string; icon: IconName; key: string; end?: boolean; adminOnly?: boolean; noObserver?: boolean }[] = [
   { to: '/', icon: 'grid', key: 'nav.fleet', end: true },
   { to: '/topology', icon: 'radar', key: 'nav.topology' },
   { to: '/diagnostics', icon: 'activity', key: 'nav.diagnostics' },
-  { to: '/terminal', icon: 'terminal', key: 'nav.terminal' },
+  { to: '/terminal', icon: 'terminal', key: 'nav.terminal', noObserver: true },
   { to: '/chat', icon: 'sparkles', key: 'nav.chat' },
   { to: '/timeline', icon: 'clock', key: 'nav.timeline' },
   { to: '/reports', icon: 'file', key: 'nav.reports' },
-  { to: '/enroll', icon: 'zap', key: 'nav.enroll' },
+  { to: '/enroll', icon: 'zap', key: 'nav.enroll', adminOnly: true },
   { to: '/probes', icon: 'radio', key: 'nav.probes' },
-  { to: '/settings', icon: 'sliders', key: 'nav.settings' },
+  { to: '/settings', icon: 'sliders', key: 'nav.settings', adminOnly: true },
 ]
+
+/** 按角色过滤导航：主机录入/设置仅 admin，终端 observer 不可用（后端同步拦截） */
+export function navFor(role: Role) {
+  return NAV.filter(n => !(n.adminOnly && role !== 'admin') && !(n.noObserver && role === 'observer'))
+}
 
 function SidebarInner({ onNavigate }: { onNavigate?: () => void }) {
   const { t } = useT()
+  const role = useRole()
   return (
     <>
       <div className="px-2 pt-2 pb-5">
@@ -98,7 +110,7 @@ function SidebarInner({ onNavigate }: { onNavigate?: () => void }) {
           </div>
         </div>
       </div>
-      {NAV.map(n => (
+      {navFor(role).map(n => (
         <NavLink key={n.to} to={n.to} end={n.end as any} onClick={onNavigate}
           className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
           <span className="nav-icon"><Ic name={n.icon} size={15.5} /></span>{t(n.key)}

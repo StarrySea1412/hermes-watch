@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useState } from 'react'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { api } from './api'
 import { useT } from './i18n'
-import { Layout } from './ui'
+import { Layout, RoleCtx, type Role } from './ui'
 import { ErrorBoundary } from './ErrorBoundary'
 import Login from './pages/Login'
 
@@ -41,9 +41,15 @@ type GateState = 'loading' | 'ok' | 'locked'
 
 function Gate() {
   const [state, setState] = useState<GateState>('loading')
+  const [role, setRole] = useState<Role>('admin')
   useEffect(() => {
-    api<{ enabled: boolean; authenticated: boolean }>('/auth/status')
-      .then(s => setState(s.enabled && !s.authenticated ? 'locked' : 'ok'))
+    api<{ enabled: boolean; authenticated: boolean; role: string }>('/auth/status')
+      .then(s => {
+        // 访问控制未开启 = 单人本机模式，按 admin 全量展示；登录跳转走整页刷新，
+        // 所以角色只在 Gate 挂载时取一次即可
+        setRole(!s.enabled || s.role === 'admin' ? 'admin' : s.role === 'operator' ? 'operator' : 'observer')
+        setState(s.enabled && !s.authenticated ? 'locked' : 'ok')
+      })
       .catch(() => setState('ok')) // 后端不可达时仍渲染界面，由各页面的报错兜底
   }, [])
   if (state === 'loading') return null
@@ -51,7 +57,8 @@ function Gate() {
   return (
     <ErrorBoundary>
       <Suspense fallback={<PageFallback />}>
-        <Routes>
+        <RoleCtx.Provider value={role}>
+          <Routes>
           <Route element={<Layout />}>
             <Route path="/" element={<Fleet />} />
             <Route path="/topology" element={<Topology />} />
@@ -66,6 +73,7 @@ function Gate() {
             <Route path="/settings" element={<Settings />} />
           </Route>
         </Routes>
+        </RoleCtx.Provider>
       </Suspense>
     </ErrorBoundary>
   )

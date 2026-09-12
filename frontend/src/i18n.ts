@@ -250,14 +250,14 @@ const ZH: Record<string, string> = {
   // 设置页：用户管理
   'st.users.title': '用户管理',
   'st.users.legacyDesc': '当前仍是单口令模式：添加第一个用户后，面板口令登录自动停用，改为账号登录（现有口令保持可用直至删除该模式）。',
-  'st.users.rolesDesc': 'admin 可写（配置/审批/执行），observer 只读（看板/报告/终端，写操作被拒绝）。',
-  'st.users.changeTo': '改为 {n}',
+  'st.users.rolesDesc': 'admin 全权（配置/主机/用户管理）；operator 值班（终端/审批/告警确认/拨测/AI 对话）；observer 只读。',
   'st.users.delConfirm': '删除用户 {n}？',
   'st.users.empty': '还没有账号，添加第一个以启用多用户模式',
-  // 设置页：observer 只读提示
+  // 设置页：operator / observer 只读提示
   'st.obs.prefix': '你以',
   'st.obs.role': 'observer（只读）',
-  'st.obs.suffix': '身份登录——面板可看，配置/审批/执行等写操作已禁用。',
+  'st.obs.roleOp': 'operator（值班）',
+  'st.obs.suffix': '身份登录——面板可看，配置/主机/用户管理等管理操作已禁用。',
   'ui.theme.dark': '夜间',
   'ui.theme.light': '日间',
   'ui.theme.system': '跟随系统',
@@ -286,6 +286,7 @@ const ZH: Record<string, string> = {
   'user.namePh': '用户名（≥2 位）',
   'user.pwPh': '口令（≥4 位）',
   'user.roleObserver': 'observer（只读）',
+  'user.roleOperator': 'operator（值班）',
   'user.roleAdmin': 'admin（可写）',
   'user.add': '＋ 添加用户',
   'term.sub': '演示主机为模拟 shell · 真实主机走 SSH PTY（asyncssh）',
@@ -859,14 +860,14 @@ const EN: Record<string, string> = {
   // Settings: user management
   'st.users.title': 'User Management',
   'st.users.legacyDesc': 'Still in single-passphrase mode: after adding the first user, panel passphrase login is disabled automatically in favor of account login (the existing passphrase keeps working until that mode is removed).',
-  'st.users.rolesDesc': 'admins can write (config/approval/execution); observers are read-only (dashboards/reports/terminal; writes are rejected).',
-  'st.users.changeTo': 'Change to {n}',
+  'st.users.rolesDesc': 'admins have full control (config/hosts/users); operators are on-duty (terminal/approval/alert ack/probes/AI chat); observers are read-only.',
   'st.users.delConfirm': 'Delete user {n}?',
   'st.users.empty': 'No accounts yet; add the first one to enable multi-user mode',
-  // Settings: observer read-only notice
+  // Settings: operator / observer read-only notice
   'st.obs.prefix': 'You are signed in as ',
   'st.obs.role': 'observer (read-only)',
-  'st.obs.suffix': ' — you can view the panel, but write operations (config/approval/execution) are disabled.',
+  'st.obs.roleOp': 'operator (on-duty)',
+  'st.obs.suffix': ' — you can view the panel, but management operations (config/hosts/users) are disabled.',
   'ui.theme.dark': 'Dark',
   'ui.theme.light': 'Light',
   'ui.theme.system': 'System',
@@ -895,6 +896,7 @@ const EN: Record<string, string> = {
   'user.namePh': 'Username (min 2 chars)',
   'user.pwPh': 'Password (min 4 chars)',
   'user.roleObserver': 'observer (read-only)',
+  'user.roleOperator': 'operator (on-duty)',
   'user.roleAdmin': 'admin (read-write)',
   'user.add': '+ Add user',
   'term.sub': 'Demo hosts run a simulated shell · real hosts connect via SSH PTY (asyncssh)',

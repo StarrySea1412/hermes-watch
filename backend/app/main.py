@@ -42,6 +42,10 @@ AUTH_OPEN = ("/api/auth/status", "/api/auth/login",
              "/api/agent/push", "/api/agent/push/body", "/api/agent/script",
              "/api/mcp", "/api/mcp/tools")
 
+# operator（值班运维）可写的路径前缀：审批/执行、告警确认与重分析、拨测、
+# AI 对话；其余写操作（用户/主机/设置/备份/LLM 配置等）仍需 admin
+OPERATOR_WRITE = ("/api/proposals", "/api/findings", "/api/probes", "/api/chat")
+
 
 @app.middleware("http")
 async def panel_auth_middleware(request: Request, call_next):
@@ -56,12 +60,18 @@ async def panel_auth_middleware(request: Request, call_next):
         role = auth.session_role(request.cookies.get(auth.COOKIE, ""))
         if not role:
             return JSONResponse({"detail": i18n.t("面板未登录", "Panel not signed in")}, status_code=401)
-        # observer 只读：拦写方法；登录后的自身口令修改走专用端点不受影响
-        if role == "observer" and request.method not in ("GET", "HEAD", "OPTIONS") \
+        # 分级写权限（自助改密走 /api/auth/self 不受影响）：
+        # observer 全拦只读；operator 仅放行值班白名单，管理操作仍需 admin
+        if role != "admin" and request.method not in ("GET", "HEAD", "OPTIONS") \
                 and not path.startswith("/api/auth/self"):
-            return JSONResponse({"detail": i18n.t("观察者角色为只读，写操作需要管理员权限",
-                                                  "Observer role is read-only — write operations require admin")},
-                                 status_code=403)
+            if role == "observer":
+                return JSONResponse({"detail": i18n.t("观察者角色为只读，写操作需要管理员权限",
+                                                      "Observer role is read-only — write operations require admin")},
+                                    status_code=403)
+            if not path.startswith(OPERATOR_WRITE):
+                return JSONResponse({"detail": i18n.t("值班角色仅可操作审批/告警/拨测/终端，管理操作需要管理员权限",
+                                                      "Operator role is limited to approvals/alerts/probes/terminal — management requires admin")},
+                                    status_code=403)
     resp = await call_next(request)
     if any(path.startswith(p) for p in ("/badge/", "/status/", "/api/push/", "/api/agent/push")):
         guard.audit(request.client.host if request.client else "-", path, resp.status_code)
@@ -893,9 +903,10 @@ async def auth_change(c: ChangePwIn):
 @app.websocket("/ws/terminal/{hid}")
 async def ws_terminal(ws: WebSocket, hid: int):
     await ws.accept()
-    if auth.enabled() and not auth.verify_session(ws.cookies.get(auth.COOKIE, "")):
-        await ws.send_text(i18n.t("面板未登录，终端连接被拒绝\r\n",
-                                  "Panel not signed in — terminal connection refused\r\n"))
+    # 终端 = 在主机上执行命令，operator/admin 可用，observer（只读）拒绝
+    if auth.enabled() and auth.session_role(ws.cookies.get(auth.COOKIE, "")) not in ("admin", "operator"):
+        await ws.send_text(i18n.t("未登录或角色无终端权限（需管理员/值班），连接被拒绝\r\n",
+                                  "Not signed in or role not permitted (admin/operator required)\r\n"))
         await ws.close()
         return
     h = db.query_one("SELECT * FROM hosts WHERE id=?", (hid,))

@@ -1056,21 +1056,34 @@ def t_rbac():
     # 多用户 CRUD + 角色校验
     uid1 = auth.add_user("__t_admin__", "pw-admin-1", "admin")
     uid2 = auth.add_user("__t_obs__", "pw-obs-1", "observer")
-    check("添加 admin/observer", auth.has_users())
+    uid3 = auth.add_user("__t_op__", "pw-op-1", "operator")
+    check("添加 admin/operator/observer", auth.has_users())
     users = {u["username"]: u["role"] for u in auth.list_users()}
-    check("用户清单角色正确", users.get("__t_admin__") == "admin" and users.get("__t_obs__") == "observer")
-    # 登录：正确/错误口令，observer 登录得 observer 角色
+    check("用户清单角色正确",
+          users.get("__t_admin__") == "admin" and users.get("__t_op__") == "operator"
+          and users.get("__t_obs__") == "observer")
+    ok_bad = False
+    try:
+        auth.add_user("__t_bad__", "pw", "root")
+    except ValueError:
+        ok_bad = True
+    check("非法角色拒绝", ok_bad)
+    # 登录：正确/错误口令，各角色登录得对应角色
     ok, role = auth.verify_login("__t_admin__", "pw-admin-1")
     check("admin 登录", ok and role == "admin")
     ok2, role2 = auth.verify_login("__t_obs__", "pw-obs-1")
     check("observer 登录", ok2 and role2 == "observer")
+    ok5, role5 = auth.verify_login("__t_op__", "pw-op-1")
+    check("operator 登录", ok5 and role5 == "operator")
     ok3, _ = auth.verify_login("__t_obs__", "wrong")
     check("错误口令拒绝", not ok3)
     # 会话携带角色 + 防篡改
     s_admin = auth.make_session("admin")
     s_obs = auth.make_session("observer")
+    s_op = auth.make_session("operator")
     check("admin 会话 → admin", auth.session_role(s_admin) == "admin")
     check("observer 会话 → observer", auth.session_role(s_obs) == "observer")
+    check("operator 会话 → operator", auth.session_role(s_op) == "operator")
     # observer 伪造 admin 角色串：签名不含 admin，校验失败
     tampered = s_obs.replace(".observer.", ".admin.")
     check("角色篡改拒绝", auth.session_role(tampered) == "")
@@ -1083,7 +1096,73 @@ def t_rbac():
     # 最后管理员保护在端点层（main._require_admin + users_del），这里测删除行为
     auth.del_user(uid1)
     auth.del_user(uid2)
+    auth.del_user(uid3)
     check("清理后无用户", not auth.has_users())
+
+
+def t_rbac_endpoints():
+    """端点层角色语义：operator 白名单放行/管理面 403，observer 全拦，WS 终端分级。"""
+    print("[rbac-endpoints]")
+    KEYS = ("panel_auth", "panel_password", "session_epoch")
+    snap = {r["key"]: r["value"] for r in db.query(
+        f"SELECT key, value FROM settings WHERE key IN {KEYS}")}
+    uid_op = uid_obs = None
+    try:
+        # 临时开启访问控制（中间件仅在开启时拦写），结束按快照还原现场
+        db.execute("INSERT INTO settings(key,value) VALUES('panel_auth','on') "
+                   "ON CONFLICT(key) DO UPDATE SET value='on'")
+        auth.set_password("pw-endpoint-test")
+        uid_op = auth.add_user("__t_ep_op__", "pw-op-1", "operator")
+        uid_obs = auth.add_user("__t_ep_obs__", "pw-obs-1", "observer")
+
+        from fastapi.testclient import TestClient
+        from app import main as web
+        client = TestClient(web.app)
+        tok_op = auth.make_session("operator")
+        tok_obs = auth.make_session("observer")
+        ck = lambda t: {"hw_session": t}  # noqa: E731
+
+        r = client.post("/api/settings", json={"__t_key__": "1"}, cookies=ck(tok_op))
+        check("operator 改设置 → 403", r.status_code == 403)
+        r = client.post("/api/hosts", json={}, cookies=ck(tok_op))
+        check("operator 加主机 → 403", r.status_code == 403)
+        r = client.post("/api/auth/users", json={"username": "x", "password": "yyyy"}, cookies=ck(tok_op))
+        check("operator 加用户 → 403", r.status_code == 403)
+        r = client.post("/api/findings/999999/ack", cookies=ck(tok_op))
+        check("operator 确认告警 → 放行（404=端点层找不到）", r.status_code == 404)
+        r = client.delete("/api/probes/999999", cookies=ck(tok_op))
+        check("operator 删拨测 → 放行（非403）", r.status_code != 403)
+        r = client.get("/api/settings", cookies=ck(tok_op))
+        check("operator 读设置 → 200", r.status_code == 200)
+
+        r = client.post("/api/findings/999999/ack", cookies=ck(tok_obs))
+        check("observer 写操作 → 403", r.status_code == 403)
+        r = client.get("/api/fleet", cookies=ck(tok_obs))
+        check("observer 读 fleet → 200", r.status_code == 200)
+
+        # WS 终端：operator 可过角色门（到"主机不存在"），observer 在角色门被拒
+        with client.websocket_connect("/ws/terminal/999999",
+                                      headers={"cookie": f"hw_session={tok_op}"}) as ws:
+            msg = ws.receive_text()
+        check("operator WS 终端放行", "主机不存在" in msg or "not found" in msg.lower())
+        with client.websocket_connect("/ws/terminal/999999",
+                                      headers={"cookie": f"hw_session={tok_obs}"}) as ws:
+            msg = ws.receive_text()
+        check("observer WS 终端拒绝", "拒绝" in msg or "refused" in msg.lower())
+    finally:
+        if uid_op:
+            auth.del_user(uid_op)
+        if uid_obs:
+            auth.del_user(uid_obs)
+        for k in KEYS:  # 还原面板访问控制现场；不动 epoch，不打断在用会话
+            if k in snap:
+                db.execute("INSERT INTO settings(key,value) VALUES(?,?) "
+                           "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (k, snap[k]))
+            else:
+                db.execute("DELETE FROM settings WHERE key=?", (k,))
+        after = {r["key"]: r["value"] for r in db.query(
+            f"SELECT key, value FROM settings WHERE key IN {KEYS}")}
+        check("设置现场已还原", after == snap)
 
 
 if __name__ == "__main__":
@@ -1118,5 +1197,6 @@ if __name__ == "__main__":
     t_notify_tpl()
     t_ack_and_silence()
     t_rbac()
+    t_rbac_endpoints()
     print(f"\n{PASS} passed, {FAIL} failed")
     sys.exit(1 if FAIL else 0)

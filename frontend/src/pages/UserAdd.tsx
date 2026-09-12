@@ -20,6 +20,7 @@ export function UserAdd({ onAdded }: { onAdded: () => void }) {
       <input className="input" type="password" placeholder={t('user.pwPh')} value={pw} onChange={e => setPw(e.target.value)} />
       <select className="input" value={role} onChange={e => setRole(e.target.value)}>
         <option value="observer">{t('user.roleObserver')}</option>
+        <option value="operator">{t('user.roleOperator')}</option>
         <option value="admin">{t('user.roleAdmin')}</option>
       </select>
       <button className="btn btn-primary justify-center" disabled={!name || !pw} onClick={add}>{t('user.add')}</button>

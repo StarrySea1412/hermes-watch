@@ -1,12 +1,13 @@
 """面板访问控制：PBKDF2 口令哈希 + HMAC 签名会话 Cookie + 多用户角色。
 
-- users 表存多用户（username 唯一 + pbkdf2 口令 + role：admin / observer）；
+- users 表存多用户（username 唯一 + pbkdf2 口令 + role：admin / operator / observer）；
   兼容存量单口令模式：无用户行时 panel_password 继续生效，角色按 admin
 - 会话 = 过期时间戳 + HMAC(key, epoch + exp + role)，key 从 .secret_key 派生；
   epoch 存 settings（session_epoch），改口令/开关访问控制/用户变更时 +1，
   已签发的所有旧 Cookie 立即整体失效（会话可撤销）
 - 登录失败限速：单 IP 每分钟 10 次后 429（内存表有上限，防无界增长）
-- 角色语义：admin 可写（改配置/审批/执行/管理用户），observer 只读
+- 角色语义：admin 全权（改配置/主机/用户管理）；operator 值班运维（终端/
+  审批/告警确认/拨测/AI 对话），不可管用户、主机、设置；observer 只读
   （GET /api 走自己的读通道；登录/登出/自己的口令修改除外）
 """
 import hashlib
@@ -20,7 +21,7 @@ from .secrets import KEY_PATH
 COOKIE = "hw_session"
 TTL = 7 * 86400
 ITER = 200_000
-ROLES = ("admin", "observer")
+ROLES = ("admin", "operator", "observer")
 _FAILS: dict[str, list[float]] = {}
 _FAILS_CAP = 1000
 

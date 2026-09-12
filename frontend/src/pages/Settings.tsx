@@ -833,13 +833,18 @@ export default function Settings() {
                     <span className="font-semibold text-[var(--text-hi)]">{u.username}</span>
                     <span className="pill text-[10px]" style={u.role === 'admin'
                       ? { background: 'var(--accent-dim)', color: 'var(--accent)' }
-                      : { background: 'var(--neutral-bg)', color: 'var(--text-mute)' }}>{u.role}</span>
+                      : u.role === 'operator'
+                        ? { background: 'var(--violet-bg)', color: 'var(--violet)' }
+                        : { background: 'var(--neutral-bg)', color: 'var(--text-mute)' }}>{u.role}</span>
                     <div className="ml-auto flex items-center gap-2.5">
-                      <button className="text-[11.5px] text-[var(--text-faint)] hover:text-[var(--accent)]"
-                        onClick={() => {
-                          const role = u.role === 'admin' ? 'observer' : 'admin'
-                          api(`/auth/users/${u.id}/role`, { method: 'POST', body: JSON.stringify({ role }) }).then(load)
-                        }}>{t('st.users.changeTo', { n: u.role === 'admin' ? 'observer' : 'admin' })}</button>
+                      <select className="input" style={{ padding: '2px 8px', fontSize: 11.5, width: 'auto' }}
+                        value={u.role} onChange={e =>
+                          api(`/auth/users/${u.id}/role`, { method: 'POST', body: JSON.stringify({ role: e.target.value }) })
+                            .then(load).catch(er => alert(er.message))}>
+                        <option value="observer">{t('user.roleObserver')}</option>
+                        <option value="operator">{t('user.roleOperator')}</option>
+                        <option value="admin">{t('user.roleAdmin')}</option>
+                      </select>
                       <button className="text-[11.5px] text-[var(--text-faint)] hover:text-[var(--crit)]"
                         onClick={() => confirm(t('st.users.delConfirm', { n: u.username })) &&
                           api(`/auth/users/${u.id}`, { method: 'DELETE' }).then(load).catch(e => alert(e.message))}>{t('btn.delete')}</button>
@@ -852,11 +857,13 @@ export default function Settings() {
             </div>
           )}
 
-          {/* observer 只读提示 */}
-          {authOn && authRole === 'observer' && (
+          {/* operator / observer 只读提示（值班角色仅开放终端/审批/告警确认/拨测） */}
+          {authOn && (authRole === 'observer' || authRole === 'operator') && (
             <div className="card p-4 mb-4 flex items-center gap-3" style={{ background: 'var(--warn-bg)', borderColor: 'var(--warn-border)' }}>
               <span style={{ color: 'var(--warn)' }}><Ic name="search" size={16} /></span>
-              <span className="text-[12.5px] text-[var(--text)]">{t('st.obs.prefix')} <b>{t('st.obs.role')}</b>{t('st.obs.suffix')}</span>
+              <span className="text-[12.5px] text-[var(--text)]">
+                {t('st.obs.prefix')} <b>{t(authRole === 'operator' ? 'st.obs.roleOp' : 'st.obs.role')}</b>{t('st.obs.suffix')}
+              </span>
             </div>
           )}
       </div>
