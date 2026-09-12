@@ -35,7 +35,7 @@ async def lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="Hermes Watch", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="Hermes Watch", version="0.4.0", lifespan=lifespan)
 
 # 无需面板会话的路径：登录流程自身、出站 Agent（token 自鉴权）、本地 MCP（只读、仅本机）
 AUTH_OPEN = ("/api/auth/status", "/api/auth/login",
