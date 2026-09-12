@@ -1,0 +1,43 @@
+name: 功能想法 / Feature Request
+description: 提议新功能或改进（Propose a feature or improvement）
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        中英文均可。设计取向请先看 README「设计铁律」：轻部署、只读提议制、AI 不做实时检测——
+        与铁律冲突的想法也会认真讨论，但会说明取舍。
+        Chinese or English both fine. See the design principles in the README first.
+  - type: textarea
+    id: problem
+    attributes:
+      label: 要解决的问题 / Problem to solve
+      description: 你的使用场景是什么？现在是怎么绕的？
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 设想的方案 / Proposed solution
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: 类型 / Kind
+      options:
+        - 采集 / 拨测面（probes, collection）
+        - 告警 / 通知（alerts, notifications）
+        - AI 能力（chat, MCP, 诊断）
+        - UI / 可视化
+        - 部署 / 运维（install, Docker, agent）
+        - 其他 / other
+    validations:
+      required: true
+  - type: checkboxes
+    id: tradeoff
+    attributes:
+      label: 取舍确认 / Trade-offs
+      options:
+        - label: 不要求引入常驻重型依赖（保持 SQLite + 单进程部署）/ keeps deployment light
+          required: true

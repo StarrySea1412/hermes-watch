@@ -1,0 +1,57 @@
+name: 缺陷报告 / Bug Report
+description: 报告 Hermes Watch 的缺陷（Report a bug）
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈。中英文均可；报障前建议先跑一次 `py backend/run_tests.py` 确认回归基线是否绿。
+        Thanks for reporting. Chinese or English both fine.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 发生了什么 / What happened
+      description: 期望行为 vs 实际行为；控制台/日志报错原文请一并贴上（注意脱敏主机名/凭据）
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤 / Steps to reproduce
+      placeholder: |
+        1. 打开 …
+        2. 点击 …
+        3. 出现 …
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: 涉及区域 / Area
+      options:
+        - 面板前端 / frontend
+        - 面板后端 API / backend
+        - AI 对话 / LLM 链路
+        - 出站 Agent（Go / sh）
+        - SSH 采集 / 终端 / 堡垒机
+        - 拨测 / 通知
+        - 安装 / Docker / 升级
+        - 其他 / other
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: 运行环境 / Environment
+      placeholder: "如：Windows 11 · Python 3.11 · v0.4.0 · Chrome 140"
+    validations:
+      required: true
+  - type: checkboxes
+    id: sanity
+    attributes:
+      label: 自查 / Checks
+      options:
+        - label: 已尝试最新 main（或最新 Release）/ on latest main or release
+          required: true
+        - label: 报错信息已脱敏（主机名/IP/凭据）/ error output sanitized
+          required: true
