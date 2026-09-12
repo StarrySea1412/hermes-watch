@@ -4,6 +4,7 @@
 LLM 叙事卡片结构。全部针对当前 SQLite 演示库，只读 + 测试数据自清理。
 """
 import asyncio
+import os
 import sys
 import time
 
@@ -566,12 +567,27 @@ def t_probes():
     check("TCP 连通判成功", ok3 and latency3 and latency3 > 0, err3)
 
     # ---- ICMP 拨测（真实环回 echo；Windows IcmpSendEcho / POSIX SOCK_DGRAM 双路都覆盖）----
+    # CI 的 Ubuntu runner 非特权用户发不了 ICMP socket（ping_group_range 不覆盖），
+    # 容器部署同款场景：socket 不可用时断言「优雅报错不炸」，可用时断言「环回通」
+    import socket as _tsocket
+    def _icmp_capable() -> bool:
+        if os.name == "nt":
+            return True  # IcmpSendEcho 无特权要求
+        try:
+            s = _tsocket.socket(_tsocket.AF_INET, _tsocket.SOCK_DGRAM, _tsocket.IPPROTO_ICMP)
+            s.close()
+            return True
+        except OSError:
+            return False
     ok4, lat4, err4 = asyncio.run(probes.run_probe(
         {"kind": "icmp", "target": "127.0.0.1", "timeout_s": 2}))
-    check("ICMP 环回通", ok4 and lat4 is not None and lat4 >= 0, err4)
+    if _icmp_capable():
+        check("ICMP 环回通", ok4 and lat4 is not None and lat4 >= 0, err4)
+    else:
+        check("ICMP 受限环境优雅报错", not ok4 and err4, err4)
     ok5, _, err5 = asyncio.run(probes.run_probe(
         {"kind": "icmp", "target": "127.0.0.1", "timeout_s": 1}))
-    check("ICMP 域名/重复目标可重复", ok5 == ok4, err5)
+    check("ICMP 目标可重复执行", ok5 == ok4, err5)
     ok6, _, err6 = asyncio.run(probes.run_probe(
         {"kind": "icmp", "target": "240.0.0.1", "timeout_s": 1}))  # 保留段，必无应答
     check("ICMP 不可达判失败", not ok6 and err6, err6)
