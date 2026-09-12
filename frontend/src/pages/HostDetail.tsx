@@ -108,7 +108,7 @@ export default function HostDetail() {
   return (
     <div className="fade-in">
       <PageHead title={d.host.name} sub={`${d.host.hostname} · SSH ${d.host.username}@${d.host.hostname} · ${d.host.mock ? t('hd.mockHost') : t('hd.realHost')} · ${t('hd.findingsMarked')}`}>
-        {[[60, 'hd.range.1h'], [240, 'hd.range.4h'], [1440, 'hd.range.24h']].map(([r, l]) => (
+        {[[60, 'hd.range.1h'], [240, 'hd.range.4h'], [1440, 'hd.range.24h'], [10080, 'hd.range.7d'], [43200, 'hd.range.30d'], [129600, 'hd.range.90d']].map(([r, l]) => (
           <button key={r as number} onClick={() => setRange(r as number)}
             className={`pill ${range === r ? '' : 'text-[var(--text-mute)]'}`}
             style={range === r ? { background: 'var(--accent-dim)', color: 'var(--accent)' } : { background: 'var(--neutral-bg)' }}>

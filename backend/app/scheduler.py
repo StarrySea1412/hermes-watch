@@ -293,13 +293,38 @@ async def _maybe_autoreport():
         traceback.print_exc()
 
 
+def _maybe_rollup_metrics():
+    """metrics 小时降采样（Grafana 式长期层）：把「上一个完整小时」的原始行
+    聚合成 metrics_hourly 单桶（AVG 各列，n=行数）。只碰完整小时保证幂等——
+    半截小时下一轮补齐；UPSERT 覆盖写，重复聚合不产生重复行。"""
+    cur = db.now()
+    bucket = int(cur // 3600) * 3600 - 3600  # 上一个整点（含它的一小时）
+    if bucket < 0:
+        return
+    lo, hi = bucket, bucket + 3600
+    agg = db.query_one(
+        "SELECT COUNT(*) AS n, AVG(cpu) AS cpu, AVG(mem) AS mem, AVG(disk) AS disk, "
+        "AVG(net_in) AS net_in, AVG(net_out) AS net_out, AVG(load1) AS load1 "
+        "FROM metrics WHERE host_id IS NOT NULL AND ts>=? AND ts<?", (lo, hi))
+    if not agg or not agg["n"]:
+        return
+    db.execute(
+        "DELETE FROM metrics_hourly WHERE bucket=?", (bucket,))
+    db.execute(
+        "INSERT INTO metrics_hourly(host_id,bucket,n,cpu,mem,disk,net_in,net_out,load1) "
+        "SELECT host_id,?,COUNT(*),AVG(cpu),AVG(mem),AVG(disk),AVG(net_in),AVG(net_out),AVG(load1) "
+        "FROM metrics WHERE ts>=? AND ts<? GROUP BY host_id", (bucket, lo, hi))
+
+
 def _maybe_retention():
-    """保留策略：metrics/probe_log 默认 7 天（0=永久），events 默认 30 天（审计表不动）。"""
+    """保留策略：metrics/probe_log 默认 7 天（0=永久），events 默认 30 天（审计表不动）；
+    小时降采样桶 metrics_hourly 固定留 90 天（长期趋势层，随原始数据滚动聚合）。"""
     days = _setting_int("metrics_retention_days", 7)
     if days > 0:
         db.execute("DELETE FROM metrics WHERE ts < ?", (db.now() - days * 86400,))
         # 拨测心跳与指标同保留期（默认 7 天）：15~30s 周期下增长不慢于 metrics
         db.execute("DELETE FROM probe_log WHERE ts < ?", (db.now() - days * 86400,))
+    db.execute("DELETE FROM metrics_hourly WHERE bucket < ?", (db.now() - 90 * 86400,))
     ev_days = _setting_int("events_retention_days", 30)
     if ev_days > 0:
         db.execute("DELETE FROM events WHERE ts < ?", (db.now() - ev_days * 86400,))
@@ -321,6 +346,7 @@ async def loop():
         try:
             await collect_all()
             await _maybe_autoreport()
+            _maybe_rollup_metrics()
             _maybe_retention()
         except Exception:
             traceback.print_exc()  # 调度循环的 bug 绝不静默

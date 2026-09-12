@@ -143,10 +143,16 @@ def call_tool(name: str, args: dict) -> dict:
     if name == "host_history":
         hid = int(args.get("host_id", 0))
         minutes = int(args.get("range_min", 240))
-        rows = db.query(
-            "SELECT ts,cpu,mem,disk,net_in,net_out,load1 FROM metrics "
-            "WHERE host_id=? AND ts>? ORDER BY ts",
-            (hid, db.now() - minutes * 60))
+        if minutes > 3 * 1440:  # 长范围走小时降采样桶（原始默认只留 7 天）
+            rows = db.query(
+                "SELECT bucket AS ts, cpu, mem, disk, net_in, net_out, load1 "
+                "FROM metrics_hourly WHERE host_id=? AND bucket>? ORDER BY bucket",
+                (hid, db.now() - minutes * 60))
+        else:
+            rows = db.query(
+                "SELECT ts,cpu,mem,disk,net_in,net_out,load1 FROM metrics "
+                "WHERE host_id=? AND ts>? ORDER BY ts",
+                (hid, db.now() - minutes * 60))
         if not rows:
             return _text(f"主机 #{hid} 无指标数据（或 ID 不存在）。")
         step = max(1, len(rows) // 60)  # cap output size

@@ -115,4 +115,5 @@ npm run dev                          # http://localhost:5273
 - [x] 拨测矩阵补宽：DNS 拨测（纯 stdlib UDP 客户端，六类 RDATA 应答校验）+ ICMP 拨测（Windows IcmpSendEcho / POSIX SOCK_DGRAM 双路，零特权零依赖）+ Push 心跳（`hw_` token 主动上报 + 容忍窗口防抖）+ 状态徽章 SVG（shields 风 `/badge/{token}.svg`，门禁独立 token 可撤销）；拨测并发化（单连接多探针 gather）
 - [x] 堡垒机链式 SSH（跳板 → 目标机两跳隧道 + 同跳板连接池共享，握手 2N→N+1）+ SSH TOFU 人工确认（首连指纹拦截、变更需采纳制，跳板自动 TOFU）+ 端口基线（LISTEN 端口漂移对比告警）
 - [x] 健康分 v2（类型化权重：安全类重、性能类轻，同型发现 0.5^n 指数衰减）+ 告警聚合（同轮同主机 crit 合并通知）+ 公开端点限流与访问审计 + 通知模板自定义（`{var}` 渲染，四调用点）
+- [x] metrics 小时降采样（Grafana 式长期层）：原始行保留期照删，小时均值桶固定留 90 天；主机详情新增 7/30/90 天趋势视图（长范围自动切小时桶，行数恒定）
 - [x] AI 对话 agentic 工具循环（对话页 LLM 自动调用与 MCP 同源的只读工具查实时数据，最多 3 轮；思考链与工具调用 SSE 透传、前端默认折叠展示；不支持 function calling 的端点自动退回纯对话）

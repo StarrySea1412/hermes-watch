@@ -220,6 +220,68 @@ def t_recovery():
     db.execute("DELETE FROM hosts WHERE id=?", (hid,))
 
 
+def t_metrics_rollup():
+    """metrics 小时降采样：聚合正确性（AVG/行数/多主机分桶）+ 幂等 + 长范围读取切换。"""
+    print("[metrics-rollup]")
+    from app import scheduler
+    hid1 = db.execute(
+        "INSERT INTO hosts(name,hostname,group_name,mock,created_at) VALUES('__t_ru1__','x','t',1,?)",
+        (db.now(),))
+    hid2 = db.execute(
+        "INSERT INTO hosts(name,hostname,group_name,mock,created_at) VALUES('__t_ru2__','x','t',1,?)",
+        (db.now(),))
+    # 历史库残留桶免疫 + 固定「上一个完整小时」
+    bucket = int(db.now() // 3600) * 3600 - 3600
+    db.execute("DELETE FROM metrics_hourly WHERE bucket=?", (bucket,))
+    lo = bucket
+    rows = [(hid1, lo + 60, 10.0, 40.0, 50.0, 100.0, 200.0, 0.5),
+            (hid1, lo + 120, 30.0, 60.0, 70.0, 300.0, 400.0, 1.5),
+            (hid2, lo + 60, 80.0, 20.0, 30.0, 10.0, 20.0, 2.0)]
+    for r in rows:
+        db.execute("INSERT INTO metrics(host_id,ts,cpu,mem,disk,net_in,net_out,load1) "
+                   "VALUES(?,?,?,?,?,?,?,?)", r)
+    try:
+        scheduler._maybe_rollup_metrics()
+        b1 = db.query_one("SELECT * FROM metrics_hourly WHERE host_id=? AND bucket=?", (hid1, bucket))
+        b2 = db.query_one("SELECT * FROM metrics_hourly WHERE host_id=? AND bucket=?", (hid2, bucket))
+        check("按主机分桶 + 行数", b1 and b1["n"] == 2 and b2 and b2["n"] == 1)
+        check("AVG 正确", abs(b1["cpu"] - 20.0) < 1e-6 and abs(b1["net_out"] - 300.0) < 1e-6
+              and abs(b2["cpu"] - 80.0) < 1e-6)
+        # 幂等断言只看测试主机的桶（测试库与运行面板共享，演示主机同小时会聚合进别的行）
+        scheduler._maybe_rollup_metrics()  # 重复跑（半截小时后重聚合）
+        b1r = db.query_one("SELECT * FROM metrics_hourly WHERE host_id=? AND bucket=?", (hid1, bucket))
+        b2r = db.query_one("SELECT * FROM metrics_hourly WHERE host_id=? AND bucket=?", (hid2, bucket))
+        check("幂等（重复聚合不重复行）",
+              b1r and b2r and abs(b1r["cpu"] - 20.0) < 1e-6 and abs(b2r["cpu"] - 80.0) < 1e-6)
+
+        # 半截小时不碰：只聚合上一个完整小时，当前小时行不会进桶
+        db.execute("INSERT INTO metrics(host_id,ts,cpu,mem,disk,net_in,net_out,load1) "
+                   "VALUES(?,?,?,?,?,?,?,?)", (hid1, db.now(), 99.0, 99.0, 99.0, 0, 0, 9))
+        scheduler._maybe_rollup_metrics()
+        b1b = db.query_one("SELECT * FROM metrics_hourly WHERE host_id=? AND bucket=?", (hid1, bucket))
+        check("当前小时不进桶", abs(b1b["cpu"] - 20.0) < 1e-6)
+
+        # 长范围读取切换：host_detail 接口 range>3 天走 hourly（用 TestClient 直打）
+        from fastapi.testclient import TestClient
+        from app import main as web
+        client = TestClient(web.app)
+        data = client.get(f"/api/hosts/{hid1}?range_min=10080").json()
+        check("7 天读取走小时桶（无原始行也返回）", bool(data.get("metrics")))
+        if data.get("metrics"):
+            m = data["metrics"][0]
+            check("小时桶行结构正确（ts=整点）", m["ts"] == bucket and m["cpu"] is not None)
+        data2 = client.get(f"/api/hosts/{hid1}?range_min=240").json()
+        # 原始行路径仍在（4h 范围内只有当前小时那条 99 行 → 也在窗内）
+        check("短范围仍走原始行", isinstance(data2.get("metrics"), list))
+    finally:
+        for h in (hid1, hid2):
+            db.execute("DELETE FROM metrics WHERE host_id=?", (h,))
+            db.execute("DELETE FROM hosts WHERE id=?", (h,))
+        db.execute("DELETE FROM metrics_hourly WHERE bucket=?", (bucket,))
+        check("现场清理", not db.query_one(
+            "SELECT id FROM hosts WHERE name LIKE '__t_ru%'"))
+
+
 def t_offline():
     print("[offline]")
     from app import analysis
@@ -1325,6 +1387,7 @@ if __name__ == "__main__":
     t_analysis_card()
     t_session_epoch()
     t_recovery()
+    t_metrics_rollup()
     t_offline()
     t_nan_guard()
     t_hysteresis()

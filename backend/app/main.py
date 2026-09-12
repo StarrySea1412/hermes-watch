@@ -182,9 +182,17 @@ def host_detail(hid: int, range_min: int = 240):
     h = db.query_one("SELECT * FROM hosts WHERE id=?", (hid,))
     if not h:
         raise HTTPException(404, i18n.t("主机不存在", "Host not found"))
-    metrics = db.query(
-        "SELECT ts,cpu,mem,disk,net_in,net_out,load1 FROM metrics WHERE host_id=? AND ts>? ORDER BY ts",
-        (hid, db.now() - range_min * 60))
+    # 长范围自动切小时降采样桶（原始 metrics 默认只留 7 天，桶留 90 天）：
+    # range ≤ 3 天走原始行，更长走 metrics_hourly（行数恒定 ≤2160，图表粒度也刚好）
+    if range_min > 3 * 1440:
+        metrics = db.query(
+            "SELECT bucket AS ts, cpu, mem, disk, net_in, net_out, load1 "
+            "FROM metrics_hourly WHERE host_id=? AND bucket>? ORDER BY bucket",
+            (hid, db.now() - range_min * 60))
+    else:
+        metrics = db.query(
+            "SELECT ts,cpu,mem,disk,net_in,net_out,load1 FROM metrics WHERE host_id=? AND ts>? ORDER BY ts",
+            (hid, db.now() - range_min * 60))
     findings = db.query(
         "SELECT * FROM findings WHERE host_id=? AND status IN ('open','analyzed') ORDER BY ts DESC", (hid,))
     for f in findings:

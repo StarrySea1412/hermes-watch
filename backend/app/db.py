@@ -36,6 +36,14 @@ CREATE TABLE IF NOT EXISTS metrics(
   cpu REAL, mem REAL, disk REAL, net_in REAL, net_out REAL, load1 REAL
 );
 CREATE INDEX IF NOT EXISTS idx_metrics ON metrics(host_id, ts);
+-- 小时降采样桶（Grafana 式长期层）：原始 metrics 到期照删，小时均值留 90 天撑长趋势。
+-- net_in/net_out 存均值（瞬时速率的均值语义正确），load1 均值，cpu/mem/disk 均值
+CREATE TABLE IF NOT EXISTS metrics_hourly(
+  host_id INTEGER, bucket INTEGER,   -- bucket = 该小时起点（整分 ts）
+  n INTEGER,
+  cpu REAL, mem REAL, disk REAL, net_in REAL, net_out REAL, load1 REAL
+);
+CREATE INDEX IF NOT EXISTS idx_metrics_hourly ON metrics_hourly(host_id, bucket);
 CREATE TABLE IF NOT EXISTS findings(
   id INTEGER PRIMARY KEY,
   host_id INTEGER, ts REAL, type TEXT, severity TEXT,
