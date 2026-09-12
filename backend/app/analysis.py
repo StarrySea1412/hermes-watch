@@ -270,7 +270,7 @@ def build_fleet_context(mapping: dict[str, str] | None = None) -> str:
     for h in snap["hosts"]:
         latest = h.get("latest") or {}
         lines.append(
-            f"- {h['name']} ({h['hostname']}, 组 {h['group']}): 健康 {h['score']}, 状态 {h['status']}, "
+            f"- [{h['id']}] {h['name']} ({h['hostname']}, 组 {h['group']}): 健康 {h['score']}, 状态 {h['status']}, "
             f"CPU {latest.get('cpu', 0):.0f}%, 内存 {latest.get('mem', 0):.0f}%, 磁盘 {latest.get('disk', 0):.0f}%, "
             f"发现 {h['open_findings']} 条")
     fs = top_findings(8)
@@ -281,43 +281,105 @@ def build_fleet_context(mapping: dict[str, str] | None = None) -> str:
     return _maybe_anonymize(text, mapping) if mapping is not None else text
 
 
+# ---------- chat 只读工具面（与 MCP 出口同一 call_tool，铁律：只读） ----------
+
+MAX_TOOL_ROUNDS = 3   # 工具循环上限，防止模型无限连环调用
+TOOL_PREVIEW = 240    # SSE 事件里给 UI 的工具结果预览长度
+
+
+def _chat_tools() -> list[dict]:
+    """MCP 工具面 → OpenAI function-calling 定义。同一套实现两个出口：本地 MCP
+    给 Claude/Cursor，chat 工具循环给面板对话——数据面永远只有一份。"""
+    from . import mcp_server as mcp  # 延迟导入：mcp_server 反向依赖本模块
+    return [{"type": "function",
+             "function": {"name": t["name"], "description": t["description"],
+                          "parameters": t["inputSchema"]}}
+            for t in mcp.TOOLS]
+
+
+def _exec_tool(name: str, args_json: str) -> str:
+    """执行一只只读工具并取文本结果；模型生成的 args 不可信，异常就地消化。"""
+    from . import mcp_server as mcp
+    try:
+        args = json.loads(args_json or "{}")
+        if not isinstance(args, dict):
+            raise ValueError("arguments 必须是 JSON 对象")
+        return mcp.call_tool(name, args)["content"][0]["text"]
+    except Exception as e:
+        return f"工具执行失败: {type(e).__name__}: {e}"
+
+
+def _chat_system(mapping: dict[str, str]) -> str:
+    return ("你是服务器巡检平台 Hermes Watch 的助手。以下是当前 fleet 快照，"
+            "回答必须只基于这些数据与只读工具的返回，不要编造。用简洁中文，"
+            "必要时给出具体建议。需要实时细节（主机指标序列、单条发现的证据链、"
+            "拨测心跳、事件流）时先调用对应只读工具再回答。\n\n"
+            + build_fleet_context(mapping))
+
+
 async def chat_answer(question: str, history: list[dict] | None = None) -> dict:
     """LLM chat grounded in fleet data. Falls back to a deterministic answer
     when AI is disabled/unconfigured — the UI must never be a dead end.
     history = 前端带来的多轮对话（[{role:'user'|'assistant', content}...]），最多取最近 10 条。
-    脱敏开关开启时，快照与提问出站前都做 anonymize，回答再映射回真实名。"""
+    只读工具面始终可用（与 MCP 同一实现）；脱敏开启时工具结果回填对话前同样
+    anonymize（工具参数均为 ID/枚举，无敏感名，占位符实体可跨轮一致引用），
+    回答再映射回真实名。工具循环最多 MAX_TOOL_ROUNDS 轮，末轮不带工具强制收尾。"""
     mapping: dict[str, str] = {}
     conf = dict(_ai_conf())
     conf["base_url"] = await resolve_base(conf)
     if _llm_enabled() and conf.get("base_url"):
-        msgs = [{"role": "system", "content": (
-            "你是服务器巡检平台 Hermes Watch 的助手。以下是当前 fleet 快照，"
-            "回答必须只基于这些数据，不要编造。用简洁中文，必要时给出具体建议。\n\n"
-            + build_fleet_context(mapping))}]
+        msgs = [{"role": "system", "content": _chat_system(mapping)}]
         for h in (history or [])[-10:]:
             role, content = h.get("role"), str(h.get("content", ""))[:2000]
             if role in ("user", "assistant") and content.strip():
                 msgs.append({"role": role, "content": _maybe_anonymize(content, mapping)})
         msgs.append({"role": "user", "content": _maybe_anonymize(question, mapping)})
         try:
-            async with httpx.AsyncClient(timeout=45) as cli:
+            async with httpx.AsyncClient(timeout=90) as cli:
                 headers = {"Authorization": f"Bearer {conf.get('api_key', '')}"} if conf.get("api_key") else {}
-                r = await cli.post(
-                    f"{conf['base_url'].rstrip('/')}/chat/completions",
-                    headers=headers,
-                    json={"model": conf.get("model", "gpt-4o-mini"),
-                          "messages": msgs,
-                          "max_tokens": 500})
-                data = r.json()
-                if r.status_code != 200 or "choices" not in data:
-                    # 网关错误 JSON（无效 Key/模型名/限流）必须带出原因，不能吞成 KeyError
-                    err = str((data.get("error") or {}).get("message") or data)[:200] if isinstance(data, dict) else str(data)[:200]
-                    raise RuntimeError(f"HTTP {r.status_code}: {err}")
-                answer = data["choices"][0]["message"]["content"] or ""
-                # 回答里的占位符映射回真实主机名，用户看到的仍是自己的机房
-                for k, v in mapping.items():
-                    answer = answer.replace(v, k)
-                return {"answer": answer, "grounded": True, "source": "llm"}
+                think_parts: list[str] = []
+                tools_used: list[dict] = []
+                rnd = 0
+                while True:
+                    r = await cli.post(
+                        f"{conf['base_url'].rstrip('/')}/chat/completions",
+                        headers=headers,
+                        json={"model": conf.get("model", "gpt-4o-mini"),
+                              "messages": msgs, "max_tokens": 900,
+                              **({"tools": _chat_tools()} if rnd < MAX_TOOL_ROUNDS else {})})
+                    data = r.json()
+                    if r.status_code != 200 or "choices" not in data:
+                        # 网关错误 JSON（无效 Key/模型名/限流）必须带出原因，不能吞成 KeyError
+                        err = str((data.get("error") or {}).get("message") or data)[:200] if isinstance(data, dict) else str(data)[:200]
+                        raise RuntimeError(f"HTTP {r.status_code}: {err}")
+                    msg = data["choices"][0].get("message") or {}
+                    if msg.get("reasoning_content"):
+                        think_parts.append(str(msg["reasoning_content"]))
+                    calls = msg.get("tool_calls") or []
+                    if not calls:
+                        answer = msg.get("content") or ""
+                        if not answer.strip():
+                            raise RuntimeError("LLM 返回空内容（检查模型名与 API Key 配置）")
+                        # 回答里的占位符映射回真实主机名，用户看到的仍是自己的机房
+                        for k, v in mapping.items():
+                            answer = answer.replace(v, k)
+                        out: dict = {"answer": answer, "grounded": True, "source": "llm"}
+                        if think_parts:
+                            out["think"] = "".join(think_parts)
+                        if tools_used:
+                            out["tools"] = tools_used
+                        return out
+                    msgs.append({"role": "assistant", "content": msg.get("content"), "tool_calls": calls})
+                    for tc in calls:
+                        fn = tc.get("function") or {}
+                        raw = _exec_tool(fn.get("name", ""), fn.get("arguments") or "{}")
+                        tools_used.append({"name": fn.get("name", ""),
+                                           "args": (fn.get("arguments") or "{}")[:TOOL_PREVIEW],
+                                           "preview": raw[:TOOL_PREVIEW]})
+                        # 回填给模型的工具结果走同一脱敏管道（UI 预览保留真实名）
+                        msgs.append({"role": "tool", "tool_call_id": tc.get("id") or "",
+                                     "content": _maybe_anonymize(raw, mapping)})
+                    rnd += 1
         except Exception as e:
             _chat_base_cache.pop(conf.get("base_url") or "", None)  # 失败即失效缓存，下轮重新归一
             reason = f"{type(e).__name__}: {e}"[:160]
@@ -328,18 +390,19 @@ async def chat_answer(question: str, history: list[dict] | None = None) -> dict:
 
 
 async def chat_stream(question: str, history: list[dict] | None = None):
-    """流式对话：LLM 开启且配置了 base_url 时逐 token 产出（脱敏在出站前完成）；
-    否则一次性产出本地规则引擎摘要。yield 事件 dict：
-    {"type":"meta","source":...} → {"type":"delta","text":...}* → {"type":"done"}"""
+    """流式对话：LLM 开启且配置了 base_url 时逐 token 产出；否则一次性产出本地
+    规则引擎摘要。yield 事件 dict：
+    {"type":"meta","source":...} → {"type":"think","text":...}*（模型思考链）
+    → {"type":"tool","name","args","preview"}*（只读工具调用，preview 为真实名）→ {"type":"delta","text":...}*
+    → {"type":"done"}。工具循环最多 MAX_TOOL_ROUNDS 轮，末轮不带工具强制收尾；
+    端点不支持 tools（HTTP 4xx）且尚未产出任何增量时，自动退回纯对话重试一次；
+    全文零增量仍强制抛错走兜底（永不空气泡）。工具结果回填对话前走脱敏管道。"""
     conf = dict(_ai_conf())
     conf["base_url"] = await resolve_base(conf)
     mapping: dict[str, str] = {}
     if _llm_enabled() and conf.get("base_url"):
         yield {"type": "meta", "source": "llm"}
-        msgs = [{"role": "system", "content": (
-            "你是服务器巡检平台 Hermes Watch 的助手。以下是当前 fleet 快照，"
-            "回答必须只基于这些数据，不要编造。用简洁中文，必要时给出具体建议。\n\n"
-            + build_fleet_context(mapping))}]
+        msgs = [{"role": "system", "content": _chat_system(mapping)}]
         for h in (history or [])[-10:]:
             role, content = h.get("role"), str(h.get("content", ""))[:2000]
             if role in ("user", "assistant") and content.strip():
@@ -347,34 +410,81 @@ async def chat_stream(question: str, history: list[dict] | None = None):
         msgs.append({"role": "user", "content": _maybe_anonymize(question, mapping)})
         try:
             headers = {"Authorization": f"Bearer {conf['api_key']}"} if conf.get("api_key") else {}
-            async with httpx.AsyncClient(timeout=60) as cli:
-                async with cli.stream(
-                    "POST", f"{conf['base_url'].rstrip('/')}/chat/completions",
-                    headers=headers,
-                    json={"model": conf.get("model", "gpt-4o-mini"),
-                          "messages": msgs, "max_tokens": 500, "stream": True}) as r:
-                    if r.status_code != 200:
-                        body = (await r.aread()).decode("utf-8", "replace")[:200]
-                        raise RuntimeError(f"HTTP {r.status_code}: {body}")
-                    got = False
-                    async for line in r.aiter_lines():
-                        if not line.startswith("data:"):
+            async with httpx.AsyncClient(timeout=90) as cli:
+                has_text = False
+                tools_on, retries = True, 0
+                rnd = 0
+                while rnd <= MAX_TOOL_ROUNDS:
+                    allow = tools_on and rnd < MAX_TOOL_ROUNDS  # 末轮不带工具，强制文本收尾
+                    tool_slots: dict[int, dict] = {}
+                    try:
+                        async with cli.stream(
+                            "POST", f"{conf['base_url'].rstrip('/')}/chat/completions",
+                            headers=headers,
+                            json={"model": conf.get("model", "gpt-4o-mini"),
+                                  "messages": msgs, "max_tokens": 900, "stream": True,
+                                  **({"tools": _chat_tools()} if allow else {})}) as r:
+                            if r.status_code != 200:
+                                body = (await r.aread()).decode("utf-8", "replace")[:200]
+                                raise RuntimeError(f"HTTP {r.status_code}: {body}")
+                            async for line in r.aiter_lines():
+                                if not line.startswith("data:"):
+                                    continue
+                                chunk = line[5:].strip()
+                                if chunk == "[DONE]":
+                                    break
+                                try:
+                                    ch = json.loads(chunk)["choices"][0]
+                                    delta = ch.get("delta") or {}
+                                except Exception:
+                                    continue
+                                th = delta.get("reasoning_content") or delta.get("reasoning")
+                                if th:  # 思考链（DeepSeek 系 reasoning_content / 通用 reasoning）
+                                    yield {"type": "think", "text": str(th)}
+                                d = delta.get("content")
+                                if d:
+                                    has_text = True
+                                    yield {"type": "delta", "text": d}
+                                for tc in delta.get("tool_calls") or []:
+                                    slot = tool_slots.setdefault(
+                                        tc.get("index", 0), {"id": "", "name": "", "args": ""})
+                                    if tc.get("id"):
+                                        slot["id"] = tc["id"]
+                                    fn = tc.get("function") or {}
+                                    if fn.get("name"):
+                                        slot["name"] = fn["name"]
+                                    if fn.get("arguments"):
+                                        slot["args"] += fn["arguments"]
+                    except RuntimeError as e:
+                        # 端点/模型不支持 function calling：还没产出任何增量时退回纯对话重试一次
+                        if allow and not has_text and str(e).startswith("HTTP 4") and retries < 1:
+                            tools_on = False
+                            retries += 1
                             continue
-                        chunk = line[5:].strip()
-                        if chunk == "[DONE]":
-                            break
-                        try:
-                            delta = json.loads(chunk)["choices"][0]["delta"].get("content")
-                        except Exception:
-                            continue
-                        if delta:
-                            got = True
-                            yield {"type": "delta", "text": delta}
-                    if not got:
-                        # 网关忽略 stream=true 返回整包 JSON / 错误体 → 零增量不能静默收尾（空气泡）
-                        raise RuntimeError("LLM 未返回任何内容（检查模型名与 API Key 配置）")
+                        raise
+                    if not tool_slots:
+                        break
+                    # 工具轮：调用先推给 UI（折叠展示，preview 保留真实名），
+                    # 执行结果脱敏后回填对话，进入下一轮
+                    ordered = [tool_slots[i] for i in sorted(tool_slots)]
+                    msgs.append({"role": "assistant", "content": None, "tool_calls": [
+                        {"id": s["id"] or f"call_{i}", "type": "function",
+                         "function": {"name": s["name"], "arguments": s["args"] or "{}"}}
+                        for i, s in enumerate(ordered)]})
+                    for i, s in enumerate(ordered):
+                        raw = _exec_tool(s["name"], s["args"])
+                        yield {"type": "tool", "name": s["name"],
+                               "args": (s["args"] or "{}")[:TOOL_PREVIEW],
+                               "preview": raw[:TOOL_PREVIEW]}
+                        msgs.append({"role": "tool", "tool_call_id": s["id"] or f"call_{i}",
+                                     "content": _maybe_anonymize(raw, mapping)})
+                    rnd += 1
+                if not has_text:
+                    # 全程只有思考/工具没有正文 → 不能静默收尾（空气泡）
+                    raise RuntimeError("LLM 未返回任何内容（检查模型名与 API Key 配置）")
             yield {"type": "done"}
         except Exception as e:
+            _chat_base_cache.pop(conf.get("base_url") or "", None)
             text = f"\n\n（LLM 流式调用失败：{type(e).__name__}，以下为本地规则引擎回答）\n\n" \
                    + _fallback_answer(question, ai_note=False)
             yield {"type": "delta", "text": text}

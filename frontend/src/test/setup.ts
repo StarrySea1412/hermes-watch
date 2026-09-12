@@ -21,6 +21,10 @@ beforeAll(() => {
   if (!('ResizeObserver' in window)) {
     ;(window as any).ResizeObserver = class { observe() {} unobserve() {} disconnect() {} }
   }
+  // Element.scrollTo：消息流自动滚动（jsdom 未实现）
+  if (!Element.prototype.scrollTo) {
+    ;(Element.prototype as any).scrollTo = () => {}
+  }
   if (!window.requestAnimationFrame) {
     ;(window as any).requestAnimationFrame = (cb: FrameRequestCallback) => setTimeout(() => cb(Date.now()), 16)
   }

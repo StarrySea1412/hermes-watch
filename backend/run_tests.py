@@ -339,6 +339,129 @@ def t_chat_stream_fallback():
     check("以 done 结束", chunks[-1]["type"] == "done")
 
 
+def t_chat_tool_loop():
+    """chat 工具循环 E2E：本地 OpenAI 兼容 mock（SSE），验证 think/tool 事件、
+    工具结果回填、不支持 tools 的端点自动退回纯对话。现场值测完还原。"""
+    print("[chat-tool-loop]")
+    import json as _json
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    seen: list[dict] = []
+    MODE = {"v": "loop"}  # loop | unsupported
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):  # resolve_base 探测 {base}/models：JSON 胜出
+            body = _json.dumps({"data": [{"id": "mock"}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length", 0))
+            body = _json.loads(self.rfile.read(n)) if n else {}
+            seen.append(body)
+            has_tools = bool(body.get("tools"))
+            tool_round = has_tools and not any(m.get("role") == "tool" for m in body.get("messages", []))
+            if not body.get("stream"):
+                # 非流式（chat_answer）：第一轮回 tool_calls，工具结果回填后回正文
+                if tool_round:
+                    out = {"choices": [{"message": {"content": None, "tool_calls": [
+                        {"id": "c1", "type": "function",
+                         "function": {"name": "fleet_status", "arguments": "{}"}}]}}]}
+                else:
+                    out = {"choices": [{"message": {"content": "Fleet 正常。"}}]}
+                payload = _json.dumps(out).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
+            if MODE["v"] == "unsupported" and has_tools:
+                err = _json.dumps({"error": {"message": "tools not supported"}}).encode()
+                self.send_response(400)
+                self.send_header("Content-Length", str(len(err)))
+                self.end_headers()
+                self.wfile.write(err)
+                return
+            if tool_round:  # 流式第一轮：思考链 + 工具调用（分片累计）
+                frames = [
+                    {"choices": [{"delta": {"reasoning_content": "用户问整体情况，"}}]},
+                    {"choices": [{"delta": {"reasoning_content": "先查 fleet 工具"}}]},
+                    {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "c1", "type": "function",
+                                                            "function": {"name": "fleet_status", "arguments": ""}}]}}]},
+                    {"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": "{}"}}]}}]},
+                    {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
+                ]
+            else:  # 第二轮 / 退回纯对话：正文
+                frames = [
+                    {"choices": [{"delta": {"content": "Fleet 共 4 台主机，全部在线。"}}]},
+                    {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+                ]
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.close_connection = True
+            for f in frames:
+                self.wfile.write(f"data: {_json.dumps(f, ensure_ascii=False)}\n\n".encode())
+            self.wfile.write(b"data: [DONE]\n\n")
+
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    prev = {k: db.query_one(f"SELECT value FROM settings WHERE key='{k}'")
+            for k in ("ai_outbound", "ai_provider", "ai_anonymize")}
+    db.execute("INSERT INTO settings(key,value) VALUES('ai_outbound','on') "
+               "ON CONFLICT(key) DO UPDATE SET value='on'")
+    db.execute("INSERT INTO settings(key,value) VALUES('ai_provider',?) "
+               "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+               (_json.dumps({"base_url": f"http://127.0.0.1:{port}/v1", "model": "mock"}),))
+    try:
+        async def _run():
+            return [c async for c in analysis.chat_stream("现在整体情况？", [])]
+
+        chunks = asyncio.run(_run())
+        check("meta llm", chunks[0]["type"] == "meta" and chunks[0]["source"] == "llm")
+        check("思考链事件", any(c["type"] == "think" and "fleet" in c.get("text", "") for c in chunks))
+        tev = [c for c in chunks if c["type"] == "tool"]
+        check("工具调用事件（名称+结果预览）",
+              len(tev) == 1 and tev[0]["name"] == "fleet_status" and "Fleet 状态" in tev[0]["preview"])
+        check("正文 delta", any(c["type"] == "delta" and "4 台主机" in (c.get("text") or "") for c in chunks))
+        check("以 done 结束", chunks[-1]["type"] == "done")
+        check("工具结果回填对话", bool(seen) and any(m.get("role") == "tool" for m in seen[-1]["messages"]))
+
+        # 端点不支持 function calling：HTTP 400 → 退回纯对话重试，正文照常
+        seen.clear()
+        MODE["v"] = "unsupported"
+        chunks2 = asyncio.run(_run())
+        check("不支持 tools → 退回纯对话仍有正文",
+              any(c["type"] == "delta" and c.get("text") for c in chunks2) and chunks2[-1]["type"] == "done")
+        check("重试请求不再携带 tools", bool(seen) and "tools" not in seen[-1])
+
+        # 非流式 chat_answer：工具循环 + think/tools 随响应返回
+        seen.clear()
+        MODE["v"] = "loop"
+        ans = asyncio.run(analysis.chat_answer("整体怎么样？", []))
+        check("非流式工具循环", ans["source"] == "llm" and ans["answer"] == "Fleet 正常。")
+        check("非流式返回工具调用记录", len(ans.get("tools") or []) == 1 and ans["tools"][0]["name"] == "fleet_status")
+    finally:
+        srv.shutdown()
+        for k, p in prev.items():
+            if p:
+                db.execute("UPDATE settings SET value=? WHERE key=?", (p["value"], k))
+            else:
+                db.execute("DELETE FROM settings WHERE key=?", (k,))
+        analysis._chat_base_cache.clear()
+        check("AI 现场已还原", bool(db.query_one("SELECT value FROM settings WHERE key='ai_provider'")) is bool(prev["ai_provider"]))
+
+
 def t_notify_log():
     print("[notify-log]")
     ok, err = asyncio.run(notify.send("测试留痕", "notify-log test"))
@@ -1181,6 +1304,7 @@ if __name__ == "__main__":
     t_quiet_hours()
     t_anonymize()
     t_chat_stream_fallback()
+    t_chat_tool_loop()
     t_notify_log()
     t_backups()
     t_probes()

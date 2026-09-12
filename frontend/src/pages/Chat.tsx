@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { fmtTime } from '../api'
-import { Ic } from '../icons'
+import { Ic, type IconName } from '../icons'
 import { PageHead } from '../ui'
 import { useT } from '../i18n'
 
-type Msg = { role: 'user' | 'bot'; text: string; source?: string; ts: number; streaming?: boolean }
+type ToolCall = { name: string; args: string; preview: string }
+type Msg = { role: 'user' | 'bot'; text: string; source?: string; ts: number; streaming?: boolean;
+  think?: string; tools?: ToolCall[] }
 
 const QUICK_KEYS = ['chat.quick.0', 'chat.quick.1', 'chat.quick.2', 'chat.quick.3']
 
@@ -16,6 +18,26 @@ const SOURCE_LABEL: Record<string, string> = {
 const SOURCE_PILL: Record<string, React.CSSProperties> = {
   llm: { background: 'var(--violet-bg)', color: 'var(--violet)' },
   fallback: { background: 'var(--warn-bg)', color: 'var(--warn)' },
+}
+
+/** 折叠块（默认收起）：思考链 / 工具调用的统一外壳，箭头随开合旋转 */
+function Collapse({ icon, label, badge, children }: {
+  icon: IconName; label: string; badge?: string; children: React.ReactNode
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="mb-2 rounded-lg overflow-hidden" style={{ border: '1px solid var(--border)', background: 'var(--neutral-bg)' }}>
+      <button className="w-full flex items-center gap-2 px-3 py-1.5 text-[11px] text-[var(--text-mute)]"
+        onClick={() => setOpen(o => !o)}>
+        <Ic name={icon} size={11} />
+        <span className="font-semibold tracking-wide">{label}</span>
+        {badge && <span className="pill text-[9.5px]" style={{ background: 'var(--accent-dim)', color: 'var(--accent)' }}>{badge}</span>}
+        <Ic name="play" size={9} className="ml-auto transition-transform"
+          style={{ transform: open ? 'rotate(90deg)' : 'none', opacity: 0.6 }} />
+      </button>
+      {open && <div className="px-3 pb-2.5">{children}</div>}
+    </div>
+  )
 }
 
 // 多轮会话持久化：刷新不丢上下文
@@ -87,6 +109,14 @@ export default function Chat() {
             const evt = JSON.parse(frame.slice(5).trim())
             if (evt.type === 'meta') {
               setMsgs(m => m.map((msg, i) => i === m.length - 1 && msg.role === 'bot' ? { ...msg, source: evt.source } : msg))
+            } else if (evt.type === 'think') {
+              // 模型思考链：累积进消息，UI 默认折叠
+              setMsgs(m => m.map((msg, i) => i === m.length - 1 && msg.role === 'bot'
+                ? { ...msg, think: (msg.think || '') + evt.text } : msg))
+            } else if (evt.type === 'tool') {
+              // 只读工具调用：名称/参数/结果预览进折叠块
+              setMsgs(m => m.map((msg, i) => i === m.length - 1 && msg.role === 'bot'
+                ? { ...msg, tools: [...(msg.tools || []), { name: evt.name, args: evt.args, preview: evt.preview }] } : msg))
             } else if (evt.type === 'delta') {
               setMsgs(m => m.map((msg, i) => i === m.length - 1 && msg.role === 'bot' ? { ...msg, text: msg.text + evt.text } : msg))
             } else if (evt.type === 'done') done = true
@@ -174,6 +204,24 @@ export default function Chat() {
                   <span className="ml-auto text-[10.5px] text-[var(--text-faint)] num opacity-0 group-hover:opacity-100 transition-opacity">{fmtTime(m.ts)}</span>
                 </div>
                 <div className="card px-4 py-3 relative" style={{ borderRadius: '4px 18px 18px 18px' }}>
+                  {/* 思考链 / 工具调用：默认折叠，点开展开 */}
+                  {!!m.think && (
+                    <Collapse icon="search" label={t('chat.think')}>
+                      <div className="mono text-[10.5px] leading-relaxed text-[var(--text-faint)] whitespace-pre-wrap">{m.think}</div>
+                    </Collapse>
+                  )}
+                  {!!m.tools?.length && (
+                    <Collapse icon="terminal" label={t('chat.tools')} badge={String(m.tools.length)}>
+                      <div className="space-y-1.5">
+                        {m.tools.map((tc, j) => (
+                          <div key={j} className="inset rounded-md px-2 py-1.5 mono text-[10.5px]">
+                            <div style={{ color: 'var(--accent)' }}>$ {tc.name}({tc.args})</div>
+                            {tc.preview && <div className="whitespace-pre-wrap mt-1 text-[var(--text-faint)]">{tc.preview}</div>}
+                          </div>
+                        ))}
+                      </div>
+                    </Collapse>
+                  )}
                   {/* LLM 输出按 Markdown 渲染（react-markdown 默认不渲染裸 HTML，安全） */}
                   <div className="md-body text-[13.5px] leading-relaxed text-[var(--text)]">
                     <ReactMarkdown>{m.text}</ReactMarkdown>
