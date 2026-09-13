@@ -1,5 +1,7 @@
 # Hermes Watch 🐚
 
+![banner](assets/banner.png)
+
 > AI 服务器巡检与可视化平台 · 把 AI 巡检还给你自己的机房
 
 [English](README_EN.md) · 中文
