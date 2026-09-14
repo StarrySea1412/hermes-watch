@@ -8,6 +8,14 @@
 
 **一句话**：Grafana/Netdata 把 AI 锁在云里按条收费，Hermes Watch 让一个懂运维的 agent 住进你自己的机器——自动巡检本地和云服务器、深挖根因、出可视化健康报告，全程数据不出本机。
 
+## 界面一览
+
+![Fleet 总览](docs/screenshots/fleet.png)
+
+| 诊断中心（根因卡 + 证据链 + 提案审批） | 拨测（URL/TCP/DNS/ICMP/Push） | AI 对话（思考链/工具调用折叠展示） |
+|---|---|---|
+| ![](docs/screenshots/diagnostics.png) | ![](docs/screenshots/probes.png) | ![](docs/screenshots/chat.png) |
+
 ## 📸 界面截图
 
 | Fleet 总览 | 主机拓扑 | 设置中心 |

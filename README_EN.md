@@ -6,6 +6,14 @@ English · [中文](README.md)
 
 **In one sentence**: Grafana/Netdata lock AI behind cloud paywalls and per-host pricing. Hermes Watch lets an ops-savvy agent live on your own machine — it inspects local and cloud servers automatically, digs into root causes, and produces visual health reports. Your data never leaves the box.
 
+## Screenshots
+
+![Fleet overview](docs/screenshots/fleet.png)
+
+| Diagnostics (root-cause cards, evidence, approvals) | Probes (URL/TCP/DNS/ICMP/Push) | AI chat (thinking & tool calls, collapsed) |
+|---|---|---|
+| ![](docs/screenshots/diagnostics.png) | ![](docs/screenshots/probes.png) | ![](docs/screenshots/chat.png) |
+
 ## Why
 
 Existing self-hosted monitoring picks two of three: light deployment, solid alerting, AI depth. Enterprise AI Ops (Keep, kagent, holmesgpt) ingests alerts from cloud tools and needs a fleet of backing services. Lightweight probes (Beszel, Gatus) polish collection but have no diagnosis. Hermes Watch occupies the empty spot: **the diagnose → approve → execute closed loop, inside a single self-hosted box that runs on 2GB of RAM**.
