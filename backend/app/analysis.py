@@ -335,7 +335,8 @@ async def chat_answer(question: str, history: list[dict] | None = None) -> dict:
                 msgs.append({"role": role, "content": _maybe_anonymize(content, mapping)})
         msgs.append({"role": "user", "content": _maybe_anonymize(question, mapping)})
         try:
-            async with httpx.AsyncClient(timeout=90) as cli:
+            # read=字节间隔超时：推理模型+中转站首字节可很慢，90s 不够用
+            async with httpx.AsyncClient(timeout=httpx.Timeout(300, connect=15)) as cli:
                 headers = {"Authorization": f"Bearer {conf.get('api_key', '')}"} if conf.get("api_key") else {}
                 think_parts: list[str] = []
                 tools_used: list[dict] = []
@@ -345,7 +346,7 @@ async def chat_answer(question: str, history: list[dict] | None = None) -> dict:
                         f"{conf['base_url'].rstrip('/')}/chat/completions",
                         headers=headers,
                         json={"model": conf.get("model", "gpt-4o-mini"),
-                              "messages": msgs, "max_tokens": 900,
+                              "messages": msgs, "max_tokens": 4000,  # 推理模型思考链也吃 token，太小会把正文挤没,
                               **({"tools": _chat_tools()} if rnd < MAX_TOOL_ROUNDS else {})})
                     data = r.json()
                     if r.status_code != 200 or "choices" not in data:
@@ -410,11 +411,20 @@ async def chat_stream(question: str, history: list[dict] | None = None):
         msgs.append({"role": "user", "content": _maybe_anonymize(question, mapping)})
         try:
             headers = {"Authorization": f"Bearer {conf['api_key']}"} if conf.get("api_key") else {}
-            async with httpx.AsyncClient(timeout=90) as cli:
+            # read=字节间隔超时：推理模型+中转站首字节可很慢，90s 不够用
+            async with httpx.AsyncClient(timeout=httpx.Timeout(300, connect=15)) as cli:
                 has_text = False
-                tools_on, retries = True, 0
+                tools_on, retries, zero_retried = True, 0, False
                 rnd = 0
-                while rnd <= MAX_TOOL_ROUNDS:
+                # 零正文可重试一次：rnd 超限后若仍无正文，关工具从头再来纯文本一轮
+                while rnd <= MAX_TOOL_ROUNDS or (not has_text and not zero_retried):
+                    if rnd > MAX_TOOL_ROUNDS:
+                        # 推理模型可能把 token 全烧在思考链上（正文零输出）：
+                        # 关工具、带已累积对话（含工具结果）强制纯文本再来一轮
+                        zero_retried = True
+                        tools_on = False
+                        rnd = 0
+                        continue
                     allow = tools_on and rnd < MAX_TOOL_ROUNDS  # 末轮不带工具，强制文本收尾
                     tool_slots: dict[int, dict] = {}
                     try:
@@ -422,7 +432,7 @@ async def chat_stream(question: str, history: list[dict] | None = None):
                             "POST", f"{conf['base_url'].rstrip('/')}/chat/completions",
                             headers=headers,
                             json={"model": conf.get("model", "gpt-4o-mini"),
-                                  "messages": msgs, "max_tokens": 900, "stream": True,
+                                  "messages": msgs, "max_tokens": 4000,  # 推理模型思考链也吃 token，太小会把正文挤没, "stream": True,
                                   **({"tools": _chat_tools()} if allow else {})}) as r:
                             if r.status_code != 200:
                                 body = (await r.aread()).decode("utf-8", "replace")[:200]
@@ -456,11 +466,18 @@ async def chat_stream(question: str, history: list[dict] | None = None):
                                     if fn.get("arguments"):
                                         slot["args"] += fn["arguments"]
                     except RuntimeError as e:
-                        # 端点/模型不支持 function calling：还没产出任何增量时退回纯对话重试一次
-                        if allow and not has_text and str(e).startswith("HTTP 4") and retries < 1:
-                            tools_on = False
-                            retries += 1
-                            continue
+                        # 零增量时的两类可重试错误：5xx 网关瞬态（CF 524=推理首字节
+                        # 超网关 ~100s 窗口，原样再试一次赌快的）；4xx=端点不支持
+                        # function calling，退纯对话。均只重试一次。
+                        if allow and not has_text and retries < 1:
+                            es = str(e)
+                            if es.startswith("HTTP 5"):
+                                retries += 1
+                                continue
+                            if es.startswith("HTTP 4"):
+                                tools_on = False
+                                retries += 1
+                                continue
                         raise
                     if not tool_slots:
                         break
@@ -485,7 +502,8 @@ async def chat_stream(question: str, history: list[dict] | None = None):
             yield {"type": "done"}
         except Exception as e:
             _chat_base_cache.pop(conf.get("base_url") or "", None)
-            text = f"\n\n（LLM 流式调用失败：{type(e).__name__}，以下为本地规则引擎回答）\n\n" \
+            reason = f"{type(e).__name__}: {e}"[:160]
+            text = f"\n\n（LLM 流式调用失败（{reason}），以下为本地规则引擎回答）\n\n" \
                    + _fallback_answer(question, ai_note=False)
             yield {"type": "delta", "text": text}
             yield {"type": "done"}
