@@ -346,7 +346,8 @@ async def chat_answer(question: str, history: list[dict] | None = None) -> dict:
                         f"{conf['base_url'].rstrip('/')}/chat/completions",
                         headers=headers,
                         json={"model": conf.get("model", "gpt-4o-mini"),
-                              "messages": msgs, "max_tokens": 4000,  # 推理模型思考链也吃 token，太小会把正文挤没,
+                              # 推理模型思考链也吃 token，太小会把正文挤没
+                              "messages": msgs, "max_tokens": 4000,
                               **({"tools": _chat_tools()} if rnd < MAX_TOOL_ROUNDS else {})})
                     data = r.json()
                     if r.status_code != 200 or "choices" not in data:
@@ -432,7 +433,9 @@ async def chat_stream(question: str, history: list[dict] | None = None):
                             "POST", f"{conf['base_url'].rstrip('/')}/chat/completions",
                             headers=headers,
                             json={"model": conf.get("model", "gpt-4o-mini"),
-                                  "messages": msgs, "max_tokens": 4000,  # 推理模型思考链也吃 token，太小会把正文挤没, "stream": True,
+                                  "messages": msgs,
+                                  # 推理模型思考链也吃 token，太小会把正文挤没
+                                  "max_tokens": 4000, "stream": True,
                                   **({"tools": _chat_tools()} if allow else {})}) as r:
                             if r.status_code != 200:
                                 body = (await r.aread()).decode("utf-8", "replace")[:200]
