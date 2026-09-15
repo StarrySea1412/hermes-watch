@@ -230,8 +230,10 @@ def t_metrics_rollup():
     hid2 = db.execute(
         "INSERT INTO hosts(name,hostname,group_name,mock,created_at) VALUES('__t_ru2__','x','t',1,?)",
         (db.now(),))
-    # 历史库残留桶免疫 + 固定「上一个完整小时」
-    bucket = int(db.now() // 3600) * 3600 - 3600
+    # 历史库残留桶免疫 + 用 3 小时前的历史窗口：面板进程每轮只聚合「上一个完整
+    # 小时」，与测试窗口永不相交，跨进程写竞态（测试库与面板共用）被结构性消除；
+    # 聚合时显式传桶（函数默认只碰上一个完整小时）
+    bucket = int(db.now() // 3600) * 3600 - 3 * 3600
     db.execute("DELETE FROM metrics_hourly WHERE bucket=?", (bucket,))
     lo = bucket
     rows = [(hid1, lo + 60, 10.0, 40.0, 50.0, 100.0, 200.0, 0.5),
@@ -241,14 +243,14 @@ def t_metrics_rollup():
         db.execute("INSERT INTO metrics(host_id,ts,cpu,mem,disk,net_in,net_out,load1) "
                    "VALUES(?,?,?,?,?,?,?,?)", r)
     try:
-        scheduler._maybe_rollup_metrics()
+        scheduler._maybe_rollup_metrics(bucket)
         b1 = db.query_one("SELECT * FROM metrics_hourly WHERE host_id=? AND bucket=?", (hid1, bucket))
         b2 = db.query_one("SELECT * FROM metrics_hourly WHERE host_id=? AND bucket=?", (hid2, bucket))
         check("按主机分桶 + 行数", b1 and b1["n"] == 2 and b2 and b2["n"] == 1)
         check("AVG 正确", abs(b1["cpu"] - 20.0) < 1e-6 and abs(b1["net_out"] - 300.0) < 1e-6
               and abs(b2["cpu"] - 80.0) < 1e-6)
         # 幂等断言只看测试主机的桶（测试库与运行面板共享，演示主机同小时会聚合进别的行）
-        scheduler._maybe_rollup_metrics()  # 重复跑（半截小时后重聚合）
+        scheduler._maybe_rollup_metrics(bucket)  # 重复跑（半截小时后重聚合）
         b1r = db.query_one("SELECT * FROM metrics_hourly WHERE host_id=? AND bucket=?", (hid1, bucket))
         b2r = db.query_one("SELECT * FROM metrics_hourly WHERE host_id=? AND bucket=?", (hid2, bucket))
         check("幂等（重复聚合不重复行）",
@@ -257,7 +259,7 @@ def t_metrics_rollup():
         # 半截小时不碰：只聚合上一个完整小时，当前小时行不会进桶
         db.execute("INSERT INTO metrics(host_id,ts,cpu,mem,disk,net_in,net_out,load1) "
                    "VALUES(?,?,?,?,?,?,?,?)", (hid1, db.now(), 99.0, 99.0, 99.0, 0, 0, 9))
-        scheduler._maybe_rollup_metrics()
+        scheduler._maybe_rollup_metrics(bucket)
         b1b = db.query_one("SELECT * FROM metrics_hourly WHERE host_id=? AND bucket=?", (hid1, bucket))
         check("当前小时不进桶", abs(b1b["cpu"] - 20.0) < 1e-6)
 
@@ -1446,7 +1448,42 @@ def t_ports_biz():
     check("现场清理", not db.query_one("SELECT id FROM hosts WHERE name='__t_probe__'"))
 
 
+def t_tg_ack():
+    """IM 双向（Telegram ack）：命令解析纯函数 + 确认应用（不出网）。"""
+    print("[tg-ack]")
+    from app import notify
+    check("裸 ack → 空列表", notify.parse_ack("ack") == [])
+    check("ack 3 → [3]", notify.parse_ack("ack 3") == [3])
+    check("ack 3,7 → [3,7]", notify.parse_ack("ack 3,7") == [3, 7])
+    check("ack #3 → [3]", notify.parse_ack("ack #3") == [3])
+    check("确认 5 → [5]", notify.parse_ack("确认 5") == [5])
+    check("非命令 → []", notify.parse_ack("你好") == [])
+    check("大小写/空白容忍", notify.parse_ack("  ACK  12 ") == [12])
+
+    hid = db.execute(
+        "INSERT INTO hosts(name,hostname,group_name,mock,created_at) VALUES('__t_tg__','x','t',1,?)",
+        (db.now(),))
+    f1 = db.execute(
+        "INSERT INTO findings(host_id,ts,type,severity,title,detail,evidence) VALUES(?,?,?,?,?,?,?)",
+        (hid, db.now(), "cpu", "crit", "【测试】CPU", "test", "{}"))
+    f2 = db.execute(
+        "INSERT INTO findings(host_id,ts,type,severity,title,detail,evidence) VALUES(?,?,?,?,?,?,?)",
+        (hid, db.now(), "disk", "crit", "【测试】磁盘", "test", "{}"))
+    try:
+        done, targets = notify.apply_acks([f1, f2, 999999])
+        check("确认两条 + 未知 ID 跳过", done == 2 and targets == [f1, f2, 999999])
+        done2, _ = notify.apply_acks([f1])
+        check("重复确认幂等（done=0）", done2 == 0)
+        rows = notify._unacked_crits()
+        check("未确认清单排除已确认", all(r["id"] not in (f1, f2) for r in rows))
+    finally:
+        db.execute("DELETE FROM findings WHERE id IN (?,?)", (f1, f2))
+        db.execute("DELETE FROM hosts WHERE id=?", (hid,))
+        check("现场清理", not db.query_one("SELECT id FROM findings WHERE id=?", (f1,)))
+
+
 if __name__ == "__main__":
+
     db.init_db()
     t_rules()
     t_executor()
@@ -1482,5 +1519,6 @@ if __name__ == "__main__":
     t_rbac()
     t_rbac_endpoints()
     t_ports_biz()
+    t_tg_ack()
     print(f"\n{PASS} passed, {FAIL} failed")
     sys.exit(1 if FAIL else 0)

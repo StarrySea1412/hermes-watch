@@ -85,6 +85,7 @@ export default function Settings() {
   const [notifyChannel, setNotifyChannel] = useState('wecom')
   const [notifyUrl, setNotifyUrl] = useState('')
   const [notifyChatId, setNotifyChatId] = useState('')
+  const [tgAck, setTgAck] = useState(false)
   const [notifyQuiet, setNotifyQuiet] = useState('')
   const [notifyResend, setNotifyResend] = useState('0')
   const [notifyMsg, setNotifyMsg] = useState('')
@@ -116,6 +117,7 @@ export default function Settings() {
       setNotifyChannel(s.notify_channel && NOTIFY_LABELS[s.notify_channel] ? s.notify_channel : 'wecom')
       setNotifyUrl(s.webhook_url || '')
       setNotifyChatId(s.telegram_chat_id || '')
+      setTgAck(s.tg_ack === 'on')
       setNotifyQuiet(s.quiet_hours || '')
       setNotifyResend(s.notify_resend_min ?? '0')
       const tv: Record<string, string> = {}
@@ -536,6 +538,11 @@ export default function Settings() {
                 <input className="input mono" placeholder="-100123456789" value={notifyChatId}
                   onChange={e => setNotifyChatId(e.target.value)}
                   onBlur={() => saveSetting('telegram_chat_id', notifyChatId)} />
+                <label className="flex items-center gap-2 mt-2 text-[12px] text-[var(--text-mute)] cursor-pointer select-none">
+                  <input type="checkbox" checked={tgAck} style={{ accentColor: 'var(--accent)' }}
+                    onChange={e => { setTgAck(e.target.checked); saveSetting('tg_ack', e.target.checked ? 'on' : 'off') }} />
+                  {t('st.notify.tgAck')}
+                </label>
               </div>
             )}
             <div>

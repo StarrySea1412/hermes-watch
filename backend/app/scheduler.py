@@ -161,9 +161,9 @@ def _resend_crit(host_name: str, open_rows: list[dict], active_types: set[str]) 
             _spawn(notify.send(
                 i18n.t("持续告警", "Ongoing alert"),
                 notify.tpl("notify_tpl_ongoing",
-                           "{host}: {title}（已持续超 {minutes} 分钟未恢复）",
-                           "{host}: {title} (over {minutes} min without recovery)",
-                           host=host_name, title=r["title"], minutes=minutes)))
+                           "{host}: {title}（已持续超 {minutes} 分钟未恢复）\n回复 ack {id} 确认",
+                           "{host}: {title} (over {minutes} min without recovery)\nReply 'ack {id}' to acknowledge",
+                           host=host_name, title=r["title"], minutes=minutes, id=r["id"])))
 
 
 async def process_findings(h: dict, latest: dict, extras: dict) -> list[dict]:
@@ -210,12 +210,13 @@ async def process_findings(h: dict, latest: dict, extras: dict) -> list[dict]:
                 pass
     if crit_new and not silenced:
         listing = "\n".join(f"• {f['title']}" for _, f in crit_new)
+        ids_csv = ",".join(str(fid) for fid, _ in crit_new)
         ok, _ = await notify.send(
             i18n.t("发现告警", "Finding alert"),
             notify.tpl("notify_tpl_finding",
-                       "{host}: {n} 条新告警\n{list}",
-                       "{host}: {n} new alerts\n{list}",
-                       host=h["name"], n=len(crit_new), list=listing))
+                       "{host}: {n} 条新告警\n{list}\n回复 ack {ids} 确认",
+                       "{host}: {n} new alerts\n{list}\nReply 'ack {ids}' to acknowledge",
+                       host=h["name"], n=len(crit_new), list=listing, ids=ids_csv))
         if ok:
             db.executemany("UPDATE findings SET last_notified=? WHERE id=?",
                            [(db.now(), fid) for fid, _ in crit_new])
@@ -293,12 +294,13 @@ async def _maybe_autoreport():
         traceback.print_exc()
 
 
-def _maybe_rollup_metrics():
+def _maybe_rollup_metrics(bucket: int | None = None):
     """metrics 小时降采样（Grafana 式长期层）：把「上一个完整小时」的原始行
     聚合成 metrics_hourly 单桶（AVG 各列，n=行数）。只碰完整小时保证幂等——
-    半截小时下一轮补齐；UPSERT 覆盖写，重复聚合不产生重复行。"""
-    cur = db.now()
-    bucket = int(cur // 3600) * 3600 - 3600  # 上一个整点（含它的一小时）
+    半截小时下一轮补齐；UPSERT 覆盖写，重复聚合不产生重复行。
+    bucket 可显式指定（测试用：指定历史桶，避免与面板进程聚合窗口相交竞态）。"""
+    if bucket is None:
+        bucket = int(db.now() // 3600) * 3600 - 3600  # 上一个整点（含它的一小时）
     if bucket < 0:
         return
     lo, hi = bucket, bucket + 3600

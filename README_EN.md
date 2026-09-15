@@ -82,6 +82,19 @@ First start seeds a 4-host demo fleet (web-1 healthy / db-1 disk full / app-1 me
 
 **Connecting real servers**: generate a token in the Enroll page and run the [Go agent](agent-go/README.md) on the target (or the `hermes-watch-agent.sh` pure sh+curl variant) — no inbound ports needed; or add SSH hosts in Settings. Point an MCP client (Claude Desktop / Cursor) at `http://127.0.0.1:8800/api/mcp` to query inspection data from your editor.
 
+## vs. all-in-one AIOps
+
+Recent entrants bundle a full Prometheus+Loki+Tempo+Grafana stack into their AI-Ops platforms (Ongrid, Aurora, Keep). Hermes Watch sits at the other end: **single-file SQLite, no message queues, runs on a 2GB box** —
+
+| | Hermes Watch | All-in-one AIOps |
+|---|---|---|
+| Deployment | one process + SQLite, one-line `install.sh` | bundled TSDB / logs / traces / graph DB |
+| Memory | a few hundred MB | GBs |
+| AI | rules-first + tool-loop chat + proposal-gated fixes | specialist agents + RAG (deeper, heavier) |
+| Fits | personal/small-team racks, NAS, edge boxes | mid-large fleets with dedicated SRE |
+
+Rule of thumb: want *another resident observer on your box* — us; want *a new observability platform plus AI* — the bundles.
+
 ## Design principles (from competitive research, see `docs/`)
 
 1. The rule engine states facts first; AI only narrates and deep-dives (never real-time detection via LLM)
@@ -95,3 +108,7 @@ First start seeds a 4-host demo fleet (web-1 healthy / db-1 disk full / app-1 me
 Tag `v*` publishes cross-compiled agent binaries (linux/amd64, linux/arm64, windows/amd64) via GitHub Actions. See [Releases](https://github.com/StarrySea1412/hermes-watch/releases).
 
 The full feature list lives in the [中文 README](README.md) (bilingual project — docs and the panel UI are Chinese-first with full English i18n).
+
+## License
+
+Apache-2.0 (see [LICENSE](LICENSE)).

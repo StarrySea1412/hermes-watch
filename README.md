@@ -105,6 +105,20 @@ npm run dev                          # http://localhost:5273
 - **告警通知**：设置 → 通知渠道，10 渠道：企业微信 / 钉钉 / 飞书 / Telegram / Server酱 / 通用 Webhook / Discord / Slack / ntfy / SMTP 邮件（Shoutrrr 式单字段配置）；crit 告警推送、恢复通知（带持续时长）、持续告警周期重发、免打扰时段，发送前可一键测试
 - **本地试 AI 叙事（无需真实 LLM）**：`py backend/mock_llm.py`（内置本地 mock 端点 :18777）→ 设置页 Base URL 填 `http://127.0.0.1:18777/v1`，开启 AI 外发后重新诊断即可看到「AI 叙事」区块
 
+## 与全家桶 AIOps 的对比
+
+赛道里出现了把 Prometheus+Loki+Tempo+Grafana 全家桶打包装进 AI Ops 重量级玩家（Ongrid、Aurora、Keep）。
+Hermes Watch 走的是另一头：**单文件 SQLite、无消息队列、2GB 内存盒子可跑**——
+
+| | Hermes Watch | 全家桶 AIOps |
+|---|---|---|
+| 部署面 | 单进程 + SQLite，`install.sh` 一条命令 | 内置时序库/日志/链路追踪/图数据库多组件 |
+| 内存 | 数百 MB | GB 级 |
+| AI 能力 | 规则引擎先行 + 工具循环对话 + 提案审批执行 | 专科 agent + RAG（更深，也更重） |
+| 适合 | 个人/小团队的自有机房、NAS、边缘盒子 | 有专职 SRE 团队的中大型集群 |
+
+选型建议：想要「机器上多一个常驻观测员」选我们；想要「重建一套观测平台再配 AI」选全家桶。
+
 ## 设计铁律（来自竞品调研，见 `docs/`）
 
 1. 规则引擎先出事实，AI 只串叙事 + 深挖（不拿 LLM 做实时检测）
@@ -113,3 +127,6 @@ npm run dev                          # http://localhost:5273
 4. AI 外发默认关闭（Termix 式 gating），开启前数据不出本机
 5. 部署极轻：单文件 SQLite，无消息队列/全家桶
 
+## License
+
+Apache-2.0（见 [LICENSE](LICENSE)）。

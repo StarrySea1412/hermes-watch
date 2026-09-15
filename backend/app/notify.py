@@ -255,6 +255,19 @@ def _tg_reply(url: str, chat_id: str, text: str) -> None:
         pass  # 回执失败不阻塞循环
 
 
+def apply_acks(ids: list[int]) -> tuple[int, list[int]]:
+    """确认一批 finding（跳过不存在/已确认的）。返回 (新确认数, 实际处理的目标列表)。
+    纯 db 函数（不外呼），供 TG 命令与测试共用。"""
+    done, targets = 0, []
+    for fid in ids:
+        row = db.query_one("SELECT id, acked_at FROM findings WHERE id=?", (fid,))
+        if row and not row["acked_at"]:
+            db.execute("UPDATE findings SET acked_at=? WHERE id=?", (db.now(), fid))
+            done += 1
+        targets.append(fid)
+    return done, targets
+
+
 def _handle_tg_command(text: str, chat_id: str) -> None:
     """解析并执行一条聊天命令：ack <ids>（裸 ack=全部未确认 crit）/ list。"""
     c = conf()
@@ -275,12 +288,7 @@ def _handle_tg_command(text: str, chat_id: str) -> None:
     ids = parse_ack(text)
     if ids is not None and (low in ("ack", "acknowledge", "确认") or ids):
         targets = ids or [r["id"] for r in _unacked_crits()]
-        done = 0
-        for fid in targets:
-            row = db.query_one("SELECT id, acked_at FROM findings WHERE id=?", (fid,))
-            if row and not row["acked_at"]:
-                db.execute("UPDATE findings SET acked_at=? WHERE id=?", (db.now(), fid))
-                done += 1
+        done, targets = apply_acks(targets)
         _tg_reply(url, cid, i18n.t(
             f"已确认 {done} 条告警（{', '.join('#' + str(i) for i in targets[:10])}）。",
             f"Acknowledged {done} alert(s) ({', '.join('#' + str(i) for i in targets[:10])})."))

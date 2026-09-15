@@ -118,5 +118,13 @@ def consume_restore_if_pending(data_dir: Path | None = None, db_path=None) -> st
             os.remove(Path(str(target) + suffix))
         except OSError:
             pass
-    os.replace(src, target)
+    # Windows 上杀软/索引器会短暂锁住刚写入的 .db 文件（WinError 32），重试一次避免偶发失败
+    for attempt in range(2):
+        try:
+            os.replace(src, target)
+            break
+        except PermissionError:
+            if attempt:
+                raise
+            time.sleep(0.3)
     return name

@@ -32,6 +32,7 @@ async def lifespan(_app: FastAPI):
     asyncio.create_task(scheduler.collect_all())  # 首轮巡检后台跑：端口先监听，SSH 慢主机不阻塞启动
     asyncio.create_task(scheduler.loop())
     asyncio.create_task(probes.loop())  # 拨测独立循环（15s 步进，与 60s 巡检解耦）
+    asyncio.create_task(notify.tg_ack_loop())  # Telegram 告警回复 ack（tg_ack=on 时生效）
     yield
 
 
