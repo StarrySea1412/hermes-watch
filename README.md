@@ -2,6 +2,8 @@
 
 ![banner](assets/banner.png)
 
+![技术栈全景图](assets/tech-stack.png)
+
 > AI 服务器巡检与可视化平台 · 把 AI 巡检还给你自己的机房
 
 [English](README_EN.md) · 中文
@@ -111,25 +113,3 @@ npm run dev                          # http://localhost:5273
 4. AI 外发默认关闭（Termix 式 gating），开启前数据不出本机
 5. 部署极轻：单文件 SQLite，无消息队列/全家桶
 
-## 路线图
-
-- [x] 拓扑视图 + WebSocket 远程终端 + 出站 Agent + 本地 MCP 端点
-- [x] 阈值可配置 + 定时自动报告 + 实时行走曲线（演示主机不再静止）
-- [x] 日/夜双主题切换（跟随系统偏好，图表/报告同步适配）
-- [x] LLM 叙事接线（诊断卡新增「AI 叙事」区：规则结论为准、AI 只补充、失败留痕不阻塞；API Key 可空适配 Ollama 等本地端点）
-- [x] SSH 密码加密存储（Fernet + 本地主密钥文件 `backend/.secret_key`，DB 泄露不等于凭据泄露，历史明文自动迁移）
-- [x] 提案可执行（批准与执行分离：白名单正则校验 + 超时拦截 + proposal_runs 全审计 + mock 主机真实恢复；执行开关默认关）
-- [x] 面板访问控制（可选口令门：PBKDF2 口令存储 + HMAC 签名 Cookie 会话 + 登录限速；出站 Agent 与本地 MCP 各走通道不受影响；设置页可开关/改口令，默认关闭）
-- [x] 出站 Agent 单二进制（Go，纯 stdlib）：HMAC-SHA256 签名 + 时间戳防重放，新增进程/失败服务/证书上报，extras 入库并驱动规则引擎；保留 sh+curl 轻量版
-- [x] 工程化：路由懒加载 + echarts/xterm 独立分包（主包 1.4MB → 242KB）、指标默认保留 7 天（可配）、`py backend/run_tests.py` 69 项回归全绿
-- [x] 告警生命周期层（对标 Uptime Kuma / Gatus / Netdata，见 `docs/竞品调研.md`）：告警自动恢复 + 恢复通知带持续时长、阈值滞后双阈值防抖、crit 持续告警周期重发、免打扰时段（跨午夜）、主机离线检测与可视化、10 渠道通知（企业微信/钉钉/飞书/Telegram/Server酱/通用 Webhook/Discord/Slack/ntfy/SMTP，设置页可测活 + 发送留痕）
-- [x] AI 对话流式输出（SSE 逐 token，LLM 关闭自动降级本地规则引擎摘要）+ LLM 出站脱敏（k8sgpt 式 anonymize：主机名/IP/用户名出站前替换占位符，映射不落盘，回答映射回真实名）
-- [x] 巡检心跳条带图（主机详情 48 桶上下状态带）+ PWA 可安装（manifest + service worker，仅生产注册）+ 公开状态页（设置页一键生成带 token 只读分享链接，60s 自动刷新，不含地址/凭据/证据，可随时撤销）+ i18n 全量双语（自建零依赖翻译层，PageHead 一键切 EN/中文；前端全部 UI 文案 + 后端发现/事件/诊断卡/通知留痕/公开状态页均跟随面板语言，历史中文行读出口正则兜底翻译）
-- [x] 多用户与 RBAC 三级角色（admin 全权 / operator 值班：终端/审批/告警确认/拨测/AI 对话 / observer 只读；users 表 + 角色签名会话 + 按角色过滤导航与 WS 终端；存量单口令兼容自动 admin）
-- [x] 运维两件套：一键安装/升级脚本（install.sh：venv + 前端构建 + 可选 systemd 自启，--update 一键升级，HW_PORT 端口可配）、SQLite 每日自动备份（在线 backup API，保留 10 份；设置页手动备份/恢复——恢复走暂存标记、重启生效，避免运行中换库）
-- [x] 服务拨测（对标 Uptime Kuma 拨测 / Gatus 状态机）：URL / TCP 目标拨测（全局/每目标独立周期），Gatus 式条件引擎（状态码 + 关键词包含 + 响应时间上限 + HTTPS 证书剩余天数）与双阈值防抖（连续失败下线 / 连续成功恢复，阈值可配），48 桶心跳条带图 + 延迟显示，翻转才落事件并外发通知（复用免打扰/留痕），手动「立即拨测」，心跳随指标保留期清理
-- [x] 拨测矩阵补宽：DNS 拨测（纯 stdlib UDP 客户端，六类 RDATA 应答校验）+ ICMP 拨测（Windows IcmpSendEcho / POSIX SOCK_DGRAM 双路，零特权零依赖）+ Push 心跳（`hw_` token 主动上报 + 容忍窗口防抖）+ 状态徽章 SVG（shields 风 `/badge/{token}.svg`，门禁独立 token 可撤销）；拨测并发化（单连接多探针 gather）
-- [x] 堡垒机链式 SSH（跳板 → 目标机两跳隧道 + 同跳板连接池共享，握手 2N→N+1）+ SSH TOFU 人工确认（首连指纹拦截、变更需采纳制，跳板自动 TOFU）+ 端口基线（LISTEN 端口漂移对比告警）
-- [x] 健康分 v2（类型化权重：安全类重、性能类轻，同型发现 0.5^n 指数衰减）+ 告警聚合（同轮同主机 crit 合并通知）+ 公开端点限流与访问审计 + 通知模板自定义（`{var}` 渲染，四调用点）
-- [x] metrics 小时降采样（Grafana 式长期层）：原始行保留期照删，小时均值桶固定留 90 天；主机详情新增 7/30/90 天趋势视图（长范围自动切小时桶，行数恒定）
-- [x] AI 对话 agentic 工具循环（对话页 LLM 自动调用与 MCP 同源的只读工具查实时数据，最多 3 轮；思考链与工具调用 SSE 透传、前端默认折叠展示；不支持 function calling 的端点自动退回纯对话）

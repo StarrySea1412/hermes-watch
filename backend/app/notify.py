@@ -8,8 +8,14 @@ quiet_hours）。免打扰时段（quiet_hours，如 "23:00-08:00"）内只记�
 SMTP 用 Shoutrrr 式单字段打包进 webhook_url（与拨测 URL 同一输入框，UI 不加字段）：
     smtp://user:pass@smtp.gmail.com:587?to=me@example.com&from=alert@example.com
     端口 465 走 SMTP_SSL，其余端口 STARTTLS。
+
+IM 双向（v1 仅 Telegram）：tg_ack=on 时启动长轮询循环（getUpdates，无需公网
+回调 URL），回复 `ack <finding_id>` = 确认告警（停止 crit 周期重发）；`list`
+= 当前未确认 crit 清单。通知附 ID 才可 ack——crit 聚合通知尾部带「ack: 3,7」。
 """
+import asyncio
 import datetime
+
 import httpx
 
 from . import db, i18n
@@ -202,3 +208,113 @@ def _log(kind: str, text: str, channel: str, ok: bool, error: str) -> None:
                    (db.now(), kind, text[:300], channel, 1 if ok else 0, error))
     except Exception:
         pass  # 留痕失败绝不影响通知主流程
+
+
+# ---------------------------------------------------------------- IM 双向（Telegram ack）
+
+def _setting_on(key: str) -> bool:
+    r = db.query_one("SELECT value FROM settings WHERE key=?", (key,))
+    return bool(r and r["value"] == "on")
+
+
+def parse_ack(text: str) -> list[int]:
+    """聊天命令 → finding ID 列表（纯函数）。`ack`/`ack 3`/`ack 3,7`/`确认 3`；
+    裸 `ack` 返回空列表（由调用方解释为「确认全部未确认 crit」）。非命令返回 []。"""
+    t = (text or "").strip().lower()
+    if t in ("ack", "acknowledge", "确认"):
+        return []
+    for prefix in ("ack", "acknowledge", "确认"):
+        if t.startswith(prefix + " ") or t.startswith(prefix + "：") or t.startswith(prefix + ":"):
+            rest = t[len(prefix):].lstrip(" ：:").replace("，", ",")
+            ids = []
+            for part in rest.split(","):
+                part = part.strip().lstrip("#")
+                if part.isdigit():
+                    ids.append(int(part))
+            return ids
+    return []
+
+
+def _tg_call(url: str, method: str, **payload):
+    """Telegram Bot API 调用（返回 json 或抛异常；超时由调用方的轮询节奏兜底）。"""
+    r = httpx.post(f"https://api.telegram.org/bot{url}/{method}",
+                   json=payload, timeout=40)
+    return r.json()
+
+
+def _unacked_crits() -> list[dict]:
+    return db.query(
+        "SELECT id, host_id, title FROM findings WHERE severity='crit' "
+        "AND acked_at IS NULL AND status IN ('open','analyzed') ORDER BY id DESC LIMIT 20")
+
+
+def _tg_reply(url: str, chat_id: str, text: str) -> None:
+    try:
+        _tg_call(url, "sendMessage", chat_id=chat_id, text=text)
+    except Exception:
+        pass  # 回执失败不阻塞循环
+
+
+def _handle_tg_command(text: str, chat_id: str) -> None:
+    """解析并执行一条聊天命令：ack <ids>（裸 ack=全部未确认 crit）/ list。"""
+    c = conf()
+    url, cid = c["url"], c["chat_id"]
+    if str(chat_id) != str(cid):
+        return  # 只听配置的 chat（防陌生人指挥面板）
+    low = (text or "").strip().lower()
+    if low in ("list", "列表", "状态"):
+        rows = _unacked_crits()
+        if not rows:
+            _tg_reply(url, cid, i18n.t("当前无未确认 crit 告警。", "No unacknowledged crit alerts."))
+        else:
+            lines = "\n".join(f"#{r['id']} {r['title']}" for r in rows)
+            _tg_reply(url, cid, i18n.t(
+                f"未确认 crit：\n{lines}\n回复 ack <ID> 确认，或 ack 全部。",
+                f"Unacked crit:\n{lines}\nReply 'ack <ID>' or 'ack' for all."))
+        return
+    ids = parse_ack(text)
+    if ids is not None and (low in ("ack", "acknowledge", "确认") or ids):
+        targets = ids or [r["id"] for r in _unacked_crits()]
+        done = 0
+        for fid in targets:
+            row = db.query_one("SELECT id, acked_at FROM findings WHERE id=?", (fid,))
+            if row and not row["acked_at"]:
+                db.execute("UPDATE findings SET acked_at=? WHERE id=?", (db.now(), fid))
+                done += 1
+        _tg_reply(url, cid, i18n.t(
+            f"已确认 {done} 条告警（{', '.join('#' + str(i) for i in targets[:10])}）。",
+            f"Acknowledged {done} alert(s) ({', '.join('#' + str(i) for i in targets[:10])})."))
+        if done:
+            try:
+                from . import scheduler
+                asyncio.get_running_loop().create_task(scheduler.broadcast(
+                    "finding", i18n.t(f"Telegram 已确认 {done} 条告警",
+                                      f"{done} alert(s) acknowledged via Telegram"), {}))
+            except Exception:
+                pass  # 广播失败不影响确认
+
+
+async def tg_ack_loop():
+    """Telegram 长轮询循环：tg_ack=on 且渠道为 telegram 时由 main.py 启动。
+    getUpdates 无需公网回调 URL（自托管本地面板的零配置双向通道）。"""
+    await asyncio.sleep(3)  # 等启动期采集落库
+    while True:
+        try:
+            if not _setting_on("tg_ack") or conf()["channel"] != "telegram" or not conf()["url"]:
+                await asyncio.sleep(15)
+                continue
+            c = conf()
+            offset = int((db.query_one("SELECT value FROM settings WHERE key='tg_ack_offset'")
+                          or {}).get("value") or 0)
+            data = _tg_call(c["url"], "getUpdates", offset=offset, timeout=30,
+                            allowed_updates=["message"])
+            for upd in (data.get("result") or []):
+                offset = max(offset, upd["update_id"] + 1)
+                msg = upd.get("message") or {}
+                if str(msg.get("chat", {}).get("id")) == str(c["chat_id"]) and msg.get("text"):
+                    _handle_tg_command(msg["text"], msg["chat"]["id"])
+            db.execute("INSERT INTO settings(key,value) VALUES('tg_ack_offset',?) "
+                       "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(offset),))
+        except Exception:
+            pass  # 网络抖动/未配置：睡一觉重来，绝不外抛
+        await asyncio.sleep(3)

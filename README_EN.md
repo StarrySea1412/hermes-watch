@@ -94,4 +94,4 @@ First start seeds a 4-host demo fleet (web-1 healthy / db-1 disk full / app-1 me
 
 Tag `v*` publishes cross-compiled agent binaries (linux/amd64, linux/arm64, windows/amd64) via GitHub Actions. See [Releases](https://github.com/StarrySea1412/hermes-watch/releases).
 
-The full feature roadmap lives in the [中文 README](README.md) (bilingual project — docs and the panel UI are Chinese-first with full English i18n).
+The full feature list lives in the [中文 README](README.md) (bilingual project — docs and the panel UI are Chinese-first with full English i18n).
