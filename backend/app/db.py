@@ -141,6 +141,8 @@ MIGRATIONS = [
     "ALTER TABLE metrics ADD COLUMN io_read REAL DEFAULT 0",
     "ALTER TABLE metrics ADD COLUMN io_write REAL DEFAULT 0",
     "ALTER TABLE metrics ADD COLUMN temp_c REAL DEFAULT 0",
+    # 主机接入模式：''=SSH 拉取（默认），'probe'=网络观测（零凭据，面板机 TCP 扫描）
+    "ALTER TABLE hosts ADD COLUMN mode TEXT DEFAULT ''",
     # swap 使用率（%，agent/SSH 探针双来源），0=无 swap 或未上报
     "ALTER TABLE metrics ADD COLUMN swap REAL DEFAULT 0",
     # DNS / Push 拨测（对标 Kuma 的 DNS monitor 与 push monitor）

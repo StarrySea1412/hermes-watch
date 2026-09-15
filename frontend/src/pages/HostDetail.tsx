@@ -31,7 +31,7 @@ export default function HostDetail() {
   const [err, setErr] = useState('')
   const [range, setRange] = useState(240)
   const [tab, setTab] = useState<(typeof TABS)[number]>('进程')
-  const [portInfo, setPortInfo] = useState<{ ports: { port: number; addr: string; proc?: string }[]; baseline: number[]; new_ports: number[] } | null>(null)
+  const [portInfo, setPortInfo] = useState<{ ports: { port: number; addr: string; proc?: string; biz?: string }[]; baseline: number[]; new_ports: number[] } | null>(null)
   const P = useChartPalette()
 
   useEffect(() => {
@@ -303,7 +303,10 @@ export default function HostDetail() {
                           <tr key={`${p.addr}:${p.port}`} className="border-b border-[var(--border)] last:border-0">
                             <td className="py-1.5 font-bold num">{p.port}</td>
                             <td className="mono text-[var(--text-mute)]">{p.addr}</td>
-                            <td className="text-[var(--text-mute)]">{p.proc || '—'}</td>
+                            <td className="text-[var(--text-mute)]">
+                              {p.proc || '—'}
+                              {p.biz && <span className="pill text-[10px] ml-1.5" style={{ background: 'var(--violet-bg)', color: 'var(--violet)' }}>{p.biz}</span>}
+                            </td>
                             <td>
                               {inBaseline
                                 ? <span className="pill" style={{ background: 'var(--ok-bg)', color: 'var(--ok)', fontSize: 10 }}>{t('hd.inBaseline')}</span>

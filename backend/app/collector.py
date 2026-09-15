@@ -174,12 +174,45 @@ async def probe_real(host: dict) -> tuple[dict | None, dict]:
             elif key == "cert":
                 extras["cert_days_left"] = parse_cert_days(r.stdout)
             elif key == "ports":
-                extras["ports"] = parse_ports(r.stdout)
+                from . import ports as ports_mod
+                extras["ports"] = ports_mod.merge_ports(parse_ports(r.stdout))
             elif key == "docker":
                 extras["docker_containers"] = parse_containers(r.stdout)
         return base, extras
     finally:
         conn.close()
+
+
+# 网络观测（probe 主机）默认扫描端口：覆盖常见服务面，settings `scan_ports` 可整体覆盖
+DEFAULT_SCAN_PORTS = "22,80,443,53,3000,3306,3389,5432,5672,6379,8000,8080,8443,9092,9200,11211,27017"
+
+
+async def probe_network(host: dict) -> dict:
+    """零凭据网络观测：面板机对目标做 TCP connect 扫描（settings `scan_ports` 可覆盖清单）。
+    返回 extras（ports 经 merge_ports 附业务标签）；全部不可达 → ports 空列表
+    （目标关机/防火墙全拦，Fleet 离线判定照常由采集链路状态驱动）。"""
+    from . import ports as ports_mod
+    r = db.query_one("SELECT value FROM settings WHERE key='scan_ports'")
+    raw = (r or {}).get("value") or DEFAULT_SCAN_PORTS
+    targets = sorted({int(x) for x in raw.split(",") if x.strip().isdigit()})
+    timeout = 2.0
+
+    async def _dial(port: int) -> tuple[int, bool]:
+        try:
+            _, w = await asyncio.wait_for(
+                asyncio.open_connection(host["hostname"], port), timeout)
+            w.close()
+            try:
+                await w.wait_closed()
+            except Exception:
+                pass
+            return port, True
+        except Exception:
+            return port, False
+
+    results = await asyncio.gather(*(_dial(p) for p in targets))
+    open_ports = [{"port": p, "addr": f"{host['hostname']}:{p}"} for p, ok in results if ok]
+    return {"ports": ports_mod.merge_ports(open_ports), "scan_mode": True}
 
 
 def _wav(base: float, amp: float) -> float:
@@ -274,6 +307,10 @@ def mock_extras(host: dict) -> dict:
 
 async def collect(host: dict) -> tuple[dict, dict]:
     """Return (latest_metrics, extras). For mock hosts also backfills the series once."""
+    if host.get("mode") == "probe":
+        # 网络观测主机（零凭据）：面板机 TCP 扫描常用端口 + 业务推断。
+        # metrics 恒为空 dict（Fleet 健康分只看 findings，端口漂移走既有基线告警）
+        return {}, await probe_network(host)
     if host.get("mock"):
         existing = db.query_one(
             "SELECT * FROM metrics WHERE host_id=? ORDER BY ts DESC LIMIT 1", (host["id"],))

@@ -142,6 +142,7 @@ class HostIn(BaseModel):
     username: str = "root"
     secret: str = ""
     group_name: str = "default"
+    mode: str = ""             # ''=SSH 拉取（默认）；'probe'=网络观测（零凭据）
     bastion_host: str = ""      # 堡垒机/跳板（空=直连）
     bastion_port: int = 22
     bastion_username: str = "root"
@@ -152,12 +153,14 @@ class HostIn(BaseModel):
 async def add_host(h: HostIn):
     if db.query_one("SELECT id FROM hosts WHERE name=?", (h.name,)):
         raise HTTPException(400, i18n.t("同名主机已存在", "A host with this name already exists"))
+    mode = h.mode if h.mode in ("", "probe") else ""
     # TOFU 人工确认模式：新主机初始 trusted=0（首次指纹记录后仍需面板确认）
     tofu_manual = (db.query_one("SELECT value FROM settings WHERE key='tofu_confirm'") or {}).get("value") == "on"
     hid = db.execute(
-        "INSERT INTO hosts(name,hostname,port,username,secret,group_name,mock,created_at,"
-        "bastion_host,bastion_port,bastion_username,bastion_secret,trusted) VALUES(?,?,?,?,?,?,0,?,?,?,?,?,?)",
-        (h.name, h.hostname, h.port, h.username, secrets.encrypt(h.secret), h.group_name, db.now(),
+        "INSERT INTO hosts(name,hostname,port,username,secret,group_name,mock,mode,created_at,"
+        "bastion_host,bastion_port,bastion_username,bastion_secret,trusted) VALUES(?,?,?,?,?,?,0,?,?,?,?,?,?,?)",
+        (h.name, h.hostname, h.port, h.username, secrets.encrypt(h.secret), h.group_name,
+         mode, db.now(),
          (h.bastion_host or "").strip(), h.bastion_port or 22, (h.bastion_username or "").strip() or "root",
          secrets.encrypt(h.bastion_secret) if (h.bastion_secret or "").strip() else "",
          0 if tofu_manual else 1))

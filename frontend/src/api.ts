@@ -1,5 +1,5 @@
 // API client + shared types
-export type Host = { id: number; name: string; hostname: string; group: string; username: string; mock: boolean; silenced_until?: number; trusted?: boolean; host_key_fp?: string; host_key_pending?: string }
+export type Host = { id: number; name: string; hostname: string; group: string; username: string; mock: boolean; mode?: string; silenced_until?: number; trusted?: boolean; host_key_fp?: string; host_key_pending?: string }
 export type HostCard = {
   id: number; name: string; hostname: string; group: string; mock: boolean
   score: number; status: 'ok' | 'warn' | 'crit' | 'offline'

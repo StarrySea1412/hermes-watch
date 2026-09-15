@@ -1377,6 +1377,75 @@ def t_rbac_endpoints():
         check("设置现场已还原", after == snap)
 
 
+def t_ports_biz():
+    """端口业务猜测 + 合并去重（纯函数）+ probe_network 真实扫描。"""
+    print("[ports-biz]")
+    from app import ports as pm
+    check("知名端口业务", pm.guess_biz(3306) and pm.guess_biz(6379) and pm.guess_biz(22))
+    check("未知端口返回空", pm.guess_biz(47612) == "")
+    check("进程名兜底", pm.guess_biz(47612, "mysqld") != "")
+    merged = pm.merge_ports([
+        {"port": 6379, "addr": "0.0.0.0:6379", "proc": ""},
+        {"port": 6379, "addr": "[::]:6379", "proc": "redis-server"},
+        {"port": 80, "addr": "0.0.0.0:80", "proc": "nginx"},
+        {"port": "bad"},
+        {"port": 99999},
+        {"port": 0},
+    ])
+    check("合并去重（6379 两条→一条，proc 取全）",
+          len(merged) == 2 and merged[1]["proc"] == "redis-server"
+          and "0.0.0.0" in merged[1]["addr"] and "[::]" in merged[1]["addr"])
+    check("合并附业务标签", merged[1]["biz"] and merged[0]["biz"])
+    check("非法行丢弃", all(0 < r["port"] <= 65535 for r in merged))
+
+    # probe_network：本机起临时 listener → 扫描清单只含它 → 必命中；业务标签随面板语言
+    import asyncio
+    import socket as _s
+    from app import collector
+    srv = _s.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+    prev_scan = db.query_one("SELECT value FROM settings WHERE key='scan_ports'")
+    db.execute("INSERT INTO settings(key,value) VALUES('scan_ports',?) "
+               "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(port),))
+    try:
+        extras = asyncio.run(collector.probe_network({"hostname": "127.0.0.1"}))
+        check("扫描命中监听端口", extras.get("scan_mode") and
+              any(p["port"] == port for p in extras["ports"]))
+        # 关掉 listener → 端口消失（不告警但清单收缩）
+        srv.close()
+        extras2 = asyncio.run(collector.probe_network({"hostname": "127.0.0.1"}))
+        check("端口关闭后清单收缩", not any(p["port"] == port for p in extras2["ports"]))
+    finally:
+        if prev_scan:
+            db.execute("UPDATE settings SET value=? WHERE key='scan_ports'", (prev_scan["value"],))
+        else:
+            db.execute("DELETE FROM settings WHERE key='scan_ports'")
+
+    # probe 主机端到端：add_host(mode=probe) → collect 走网络观测（metrics 空、extras.ports 有结构）
+    from app import collector as col
+    hid = db.execute(
+        "INSERT INTO hosts(name,hostname,mode,created_at) VALUES('__t_probe__','127.0.0.1','probe',?)",
+        (db.now(),))
+    srv2 = _s.socket()
+    srv2.bind(("127.0.0.1", 0))
+    srv2.listen(1)
+    db.execute("UPDATE settings SET value=? WHERE key='scan_ports'", (str(srv2.getsockname()[1]),))
+    try:
+        latest, extras3 = asyncio.run(col.collect(dict(db.query_one("SELECT * FROM hosts WHERE id=?", (hid,)))))
+        check("probe 主机采集：metrics 空 + extras.ports 命中",
+              latest == {} and extras3.get("scan_mode") and extras3["ports"])
+    finally:
+        srv2.close()
+        db.execute("DELETE FROM hosts WHERE id=?", (hid,))
+        if prev_scan:
+            db.execute("UPDATE settings SET value=? WHERE key='scan_ports'", (prev_scan["value"],))
+        else:
+            db.execute("DELETE FROM settings WHERE key='scan_ports'")
+    check("现场清理", not db.query_one("SELECT id FROM hosts WHERE name='__t_probe__'"))
+
+
 if __name__ == "__main__":
     db.init_db()
     t_rules()
@@ -1412,5 +1481,6 @@ if __name__ == "__main__":
     t_ack_and_silence()
     t_rbac()
     t_rbac_endpoints()
+    t_ports_biz()
     print(f"\n{PASS} passed, {FAIL} failed")
     sys.exit(1 if FAIL else 0)

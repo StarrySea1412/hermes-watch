@@ -67,7 +67,7 @@ export default function Settings() {
   const { t } = useT()
   const [hosts, setHosts] = useState<Host[]>([])
   const [settings, setSettings] = useState<Record<string, string>>({})
-  const [form, setForm] = useState({ name: '', hostname: '', username: 'root', secret: '', group_name: 'default',
+  const [form, setForm] = useState({ name: '', hostname: '', username: 'root', secret: '', group_name: 'default', mode: '',
     bastion_host: '', bastion_port: '22', bastion_username: 'root', bastion_secret: '' })
   const [bastionOpen, setBastionOpen] = useState(false)
   const [msg, setMsg] = useState('')
@@ -141,7 +141,7 @@ export default function Settings() {
         ...form, bastion_port: Number(form.bastion_port) || 22,
       }) })
       setMsg(t('st.hosts.added', { n: form.name }))
-      setForm({ name: '', hostname: '', username: 'root', secret: '', group_name: 'default',
+      setForm({ name: '', hostname: '', username: 'root', secret: '', group_name: 'default', mode: form.mode,
         bastion_host: '', bastion_port: '22', bastion_username: 'root', bastion_secret: '' })
       load()
     } catch (e: any) { setMsg(`✕ ${e.message}`) }
@@ -645,7 +645,7 @@ export default function Settings() {
                   <span className="pill" style={h.mock
                     ? { background: 'var(--neutral-bg)', color: 'var(--text-mute)' }
                     : { background: 'var(--accent-dim)', color: 'var(--accent)' }}>
-                    {h.mock ? t('st.hosts.mock') : 'SSH'}
+                    {h.mock ? t('st.hosts.mock') : (h.mode === 'probe' ? t('st.hosts.modeProbeShort') : 'SSH')}
                   </span>
                 </td>
                 <td>
@@ -674,11 +674,26 @@ export default function Settings() {
           </tbody>
         </table>
         </div>
-        <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 items-end">
+        {/* 接入模式：SSH 拉取（默认，需凭据）/ 网络观测（零凭据，面板机 TCP 扫描常用端口+业务推断） */}
+        <div className="flex items-center gap-1.5 mt-4">
+          {(['', 'probe'] as const).map(m => (
+            <button key={m || 'ssh'} onClick={() => setForm({ ...form, mode: m })}
+              className={`pill ${form.mode === m ? '' : 'text-[var(--text-mute)]'}`}
+              style={form.mode === m ? { background: 'var(--accent-dim)', color: 'var(--accent)' } : { background: 'var(--neutral-bg)' }}>
+              {m === '' ? t('st.hosts.modeSsh') : t('st.hosts.modeProbe')}
+            </button>
+          ))}
+          <span className="text-[10.5px] text-[var(--text-faint)] ml-1">
+            {form.mode === 'probe' ? t('st.hosts.modeProbeHint') : t('st.hosts.modeSshHint')}
+          </span>
+        </div>
+        <div className="mt-2.5 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 items-end">
           <input className="input" placeholder={t('st.hosts.name')} value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
           <input className="input col-span-2 mono" placeholder={t('st.hosts.phAddr')} value={form.hostname} onChange={e => setForm({ ...form, hostname: e.target.value })} />
-          <input className="input" placeholder={t('st.hosts.user')} value={form.username} onChange={e => setForm({ ...form, username: e.target.value })} />
-          <input className="input" placeholder={t('st.hosts.phSecret')} type="password" value={form.secret} onChange={e => setForm({ ...form, secret: e.target.value })} />
+          {form.mode !== 'probe' && (<>
+            <input className="input" placeholder={t('st.hosts.user')} value={form.username} onChange={e => setForm({ ...form, username: e.target.value })} />
+            <input className="input" placeholder={t('st.hosts.phSecret')} type="password" value={form.secret} onChange={e => setForm({ ...form, secret: e.target.value })} />
+          </>)}
           <button className="btn btn-primary justify-center" onClick={add}>{t('st.hosts.add')}</button>
         </div>
         {/* 堡垒机/跳板折叠区：经跳板隧道路由 SSH（TOFU 指纹与目标机独立），口令同样加密存储 */}
