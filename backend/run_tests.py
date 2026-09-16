@@ -384,6 +384,12 @@ def t_anonymize():
     else:
         db.execute("DELETE FROM settings WHERE key='hw_lang'")
 
+    # 反向映射：占位符还原真实名 + 前缀占位符不误伤（主机-1 不吃掉 主机-12）
+    m = {"web-1": "主机-1", "web-12": "主机-12", "db.internal": "10.9.0.8"}
+    ans = analysis.de_anonymize("主机-12 正常，主机-1 在 10.9.0.8 报警", m)
+    check("前缀占位符不误伤", ans == "web-12 正常，web-1 在 db.internal 报警")
+    check("空映射原样返回", analysis.de_anonymize("原文", {}) == "原文")
+
 
 def t_chat_stream_fallback():
     print("[chat-stream]")

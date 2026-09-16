@@ -12,7 +12,7 @@ import { alpha, useChartPalette } from '../theme'
  * Hub 居中发光，主机按健康状态分层（严重内圈 → 警告中圈 → 健康外圈），
  * 节点为径向渐变圆 + 状态色粗环 + 内嵌图标 + 外发光，卡片顶部常驻状态统计条。
  */
-const RING: Record<HostCard['status'], number> = { crit: 150, warn: 240, ok: 330, offline: 330 }
+const RING_BASE: Record<HostCard['status'], number> = { crit: 150, warn: 240, ok: 330, offline: 330 }
 
 export default function Topology() {
   const { t, lang } = useT()
@@ -26,6 +26,8 @@ export default function Topology() {
   const P = useChartPalette()
   // callback ref：画布容器随 hosts 数据条件渲染，用 state 触发初始化 effect 重跑
   const [box, setBox] = useState<HTMLDivElement | null>(null)
+  // 初始化完成的标记：hosts 先于图表就绪到达时，绘制 effect 靠它重跑（否则要等下一次 SSE 心跳才有图）
+  const [chartReady, setChartReady] = useState(false)
   const chartRef = useRef<echarts.ECharts | undefined>(undefined)
   const navRef = useRef(nav); navRef.current = nav
   const hostsRef = useRef(hosts); hostsRef.current = hosts
@@ -44,7 +46,8 @@ export default function Topology() {
     })
     const onResize = () => chart.resize()
     window.addEventListener('resize', onResize)
-    return () => { window.removeEventListener('resize', onResize); chart.dispose(); chartRef.current = undefined }
+    setChartReady(true)
+    return () => { window.removeEventListener('resize', onResize); chart.dispose(); chartRef.current = undefined; setChartReady(false) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [box, P['--bg-panel']])
 
@@ -95,16 +98,36 @@ export default function Topology() {
     ]
     const links: any[] = []
 
-    // 分层布环：每个状态环内均匀分布 + 微抖动打破呆板对称；主机少时整体收拢
+    // 分层布环：每个状态环内均匀分布 + 微抖动打破呆板对称；主机少时整体收拢。
+    // 环半径动态计算：同环按节点数保证角间距（周长/节点 ≥ 170px，给三行标签留宽），
+    // 相邻环间距 ≥ 120px（标签高 ~50px + 节点半径 ~45px）；空环不外推半径；
+    // 起始角链式错开（上一环起始角 + 半个角步）：保证与上一环任一节点的角距 ≥ 半步，
+    // 避免径向对齐导致上下环标签挤在同一竖列
     const byStatus: Record<string, HostCard[]> = { crit: [], warn: [], ok: [], offline: [] }
     hosts.forEach(h => (byStatus[h.status] ?? byStatus.ok).push(h))
     const shrink = hosts.length <= 3 ? 0.78 : 1
-    const ringStart: Record<string, number> = { crit: 0.4, warn: 0.9, ok: 0.05, offline: 0.05 }
+    const ringR: Record<string, number> = {}
+    const ringStartEff: Record<string, number> = {}
+    let prevR = 0
+    let nextStart = 0.4
+    let firstRing = true
+    for (const st of ['crit', 'warn', 'ok', 'offline'] as const) {
+      const n = byStatus[st].length
+      if (!n) { ringR[st] = prevR; continue }
+      const need = (n * 170) / (Math.PI * 2)
+      prevR = Math.max(RING_BASE[st], prevR + 120, need) * shrink
+      ringR[st] = prevR
+      ringStartEff[st] = firstRing ? 0.4 : nextStart
+      nextStart = ringStartEff[st] + Math.PI / n  // 半个角步（2π/n 的一半）
+      firstRing = false
+    }
     for (const st of ['crit', 'warn', 'ok', 'offline'] as const) {
       const arr = byStatus[st]
+      // 环上超过 10 台时收掉 CPU/磁盘 meta 行（最宽的一行），标签只剩名称+健康分
+      const metaOn = arr.length <= 10
       arr.forEach((h, i) => {
-        const angle = ringStart[st] + (i / arr.length) * Math.PI * 2
-        const r = RING[st] * shrink
+        const angle = ringStartEff[st] + (i / arr.length) * Math.PI * 2
+        const r = ringR[st]
         const x = Math.cos(angle) * r + Math.sin(h.id * 9.7) * 12
         const y = Math.sin(angle) * r + Math.cos(h.id * 5.3) * 9
         const c = colorOf(h)
@@ -117,7 +140,7 @@ export default function Topology() {
             shadowBlur: st === 'ok' ? 16 : 26, shadowColor: alpha(c, 0.55),
           },
           label: { show: true, position: 'bottom', distance: 7,
-            formatter: `{name|${h.name}}\n{meta|${h.group}${h.latest ? ` · CPU ${h.latest.cpu.toFixed(0)}% · ${t('topo.disk')} ${h.latest.disk.toFixed(0)}%` : ''}}\n{score|● ${h.score}}`,
+            formatter: `{name|${h.name}}\n${metaOn && h.latest ? `{meta|${h.group}${h.latest ? ` · CPU ${h.latest.cpu.toFixed(0)}% · ${t('topo.disk')} ${h.latest.disk.toFixed(0)}%` : ''}}\n` : ''}{score|● ${h.score}}`,
             rich: {
               name: { color: P['--text-hi'], fontSize: 12.5, fontWeight: 600, align: 'center', lineHeight: 19 },
               meta: { color: P['--text-faint'], fontSize: 10, align: 'center', lineHeight: 15 },
@@ -160,13 +183,15 @@ export default function Topology() {
       },
       series: [{
         type: 'graph', layout: 'none', roam: true, scaleLimit: { min: 0.4, max: 3 },
+        // 上下留白：自动缩放只算节点圆不算标签，底部标签（三行 ~50px）会被卡片边裁掉
+        top: 24, bottom: 72,
         data: nodes, links,
         categories: [{ name: 'Hub' }, { name: 'hosts' }],
         emphasis: { scale: 1.12, focus: 'adjacency', itemStyle: { shadowBlur: 34 } },
       }],
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hosts, P, lang])
+  }, [hosts, P, lang, chartReady])
 
   const stats = useMemo(() => ({
     ok: hosts.filter(h => h.status === 'ok').length,

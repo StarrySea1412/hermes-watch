@@ -262,6 +262,14 @@ def _maybe_anonymize(text: str, mapping: dict[str, str]) -> str:
     return anonymize(text, mapping) if _anonymize_enabled() else text
 
 
+def de_anonymize(text: str, mapping: dict[str, str]) -> str:
+    """回答里的占位符映射回真实名（用户看到的仍是自己的机房）。
+    按占位符长度降序替换，避免前缀占位符误伤（主机-1 吃掉 主机-12 的前半）。"""
+    for real, ph in sorted(mapping.items(), key=lambda kv: -len(kv[1])):
+        text = text.replace(ph, real)
+    return text
+
+
 def build_fleet_context(mapping: dict[str, str] | None = None) -> str:
     """Compact text snapshot of the fleet for grounding LLM answers.
     mapping 传入时执行脱敏（k8sgpt 式 anonymize）。"""
@@ -363,8 +371,7 @@ async def chat_answer(question: str, history: list[dict] | None = None) -> dict:
                         if not answer.strip():
                             raise RuntimeError("LLM 返回空内容（检查模型名与 API Key 配置）")
                         # 回答里的占位符映射回真实主机名，用户看到的仍是自己的机房
-                        for k, v in mapping.items():
-                            answer = answer.replace(v, k)
+                        answer = de_anonymize(answer, mapping)
                         out: dict = {"answer": answer, "grounded": True, "source": "llm"}
                         if think_parts:
                             out["think"] = "".join(think_parts)
@@ -502,7 +509,7 @@ async def chat_stream(question: str, history: list[dict] | None = None):
                 if not has_text:
                     # 全程只有思考/工具没有正文 → 不能静默收尾（空气泡）
                     raise RuntimeError("LLM 未返回任何内容（检查模型名与 API Key 配置）")
-            yield {"type": "done"}
+            yield {"type": "done", "mapping": mapping}
         except Exception as e:
             _chat_base_cache.pop(conf.get("base_url") or "", None)
             reason = f"{type(e).__name__}: {e}"[:160]

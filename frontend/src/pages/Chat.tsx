@@ -119,7 +119,18 @@ export default function Chat() {
                 ? { ...msg, tools: [...(msg.tools || []), { name: evt.name, args: evt.args, preview: evt.preview }] } : msg))
             } else if (evt.type === 'delta') {
               setMsgs(m => m.map((msg, i) => i === m.length - 1 && msg.role === 'bot' ? { ...msg, text: msg.text + evt.text } : msg))
-            } else if (evt.type === 'done') done = true
+            } else if (evt.type === 'done') {
+              // 脱敏开启时 done 事件带占位符→真实名映射：流式期间的占位符在收尾时统一映射回
+              const map: Record<string, string> = evt.mapping || {}
+              const pairs = Object.entries(map).sort((a, b) => b[1].length - a[1].length)
+              const restore = (s: string) => {
+                for (const [real, ph] of pairs) s = s.split(ph).join(real)
+                return s
+              }
+              setMsgs(m => m.map((msg, i) => i === m.length - 1 && msg.role === 'bot'
+                ? { ...msg, text: restore(msg.text), think: msg.think ? restore(msg.think) : msg.think } : msg))
+              done = true
+            }
           } catch { /* 忽略残帧 */ }
         }
       }
