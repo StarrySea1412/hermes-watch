@@ -9,7 +9,7 @@ import { Ic } from '../icons'
 // success_threshold 次成功 → up。防抖窗口内显示「观察中 / 恢复中 x/N」徽标。
 
 type Probe = {
-  id: number; name: string; kind: 'url' | 'tcp' | 'dns' | 'icmp' | 'push'; target: string
+  id: number; name: string; kind: 'url' | 'tcp' | 'dns' | 'doh' | 'icmp' | 'push'; target: string
   up: 0 | 1; fail_streak: number; succ_streak: number
   fail_threshold: number; success_threshold: number; timeout_s: number
   keyword: string; max_latency_ms: number; cert_days_min: number; interval_s: number
@@ -61,8 +61,8 @@ function ProbeCard({ p, logs, running, badgeToken, onRun, onAskDelete, onCopyBad
             </span>
           </div>
           <div className="text-[11.5px] text-[var(--text-faint)] mt-0.5 mono truncate"
-            title={p.kind === 'dns' ? `${p.target} · ${p.dns_type} @ ${p.dns_resolver}` : p.target}>
-            {p.kind === 'dns' ? `${p.target} · ${p.dns_type} @ ${p.dns_resolver}` : p.target}
+            title={p.kind === 'dns' || p.kind === 'doh' ? `${p.target} · ${p.dns_type} @ ${p.dns_resolver}` : p.target}>
+            {p.kind === 'dns' || p.kind === 'doh' ? `${p.target} · ${p.dns_type} @ ${p.dns_resolver}` : p.target}
           </div>
         </div>
         <span className="pill shrink-0" style={{ background: ok ? 'var(--ok-bg)' : 'var(--crit-bg)', color, border: `1px solid ${ok ? 'var(--ok-border)' : 'var(--crit-border)'}` }}>
@@ -164,7 +164,7 @@ export default function Probes() {
   const [logs, setLogs] = useState<Record<number, ProbeLog[]>>({})
   const [loadErr, setLoadErr] = useState('')
   const [msg, setMsg] = useState('')
-  const [form, setForm] = useState({ name: '', kind: 'url' as 'url' | 'tcp' | 'dns' | 'icmp' | 'push', target: '' })
+  const [form, setForm] = useState({ name: '', kind: 'url' as 'url' | 'tcp' | 'dns' | 'doh' | 'icmp' | 'push', target: '' })
   const [advOpen, setAdvOpen] = useState(false)
   const [adv, setAdv] = useState({
     fail_threshold: '3', success_threshold: '2', timeout_s: '10',
@@ -238,8 +238,8 @@ export default function Probes() {
     if (form.kind === 'url' && adv.max_latency_ms !== '') payload.max_latency_ms = Number(adv.max_latency_ms)
     if (form.kind === 'url' && adv.cert_days_min !== '') payload.cert_days_min = Number(adv.cert_days_min)
     if (adv.interval_s !== '') payload.interval_s = Number(adv.interval_s)
-    // DNS 三件套与 Push 容忍窗口随各自 kind 提交
-    if (form.kind === 'dns') {
+    // DNS 三件套（dns/doh 共用）与 Push 容忍窗口随各自 kind 提交
+    if (form.kind === 'dns' || form.kind === 'doh') {
       payload.dns_resolver = adv.dns_resolver.trim()
       payload.dns_type = adv.dns_type
       payload.dns_expected = adv.dns_expected.trim()
@@ -346,7 +346,7 @@ export default function Probes() {
           <div>
             <div className="text-[11px] text-[var(--text-faint)] mb-1.5">{t('pr.kind')}</div>
             <div className="flex gap-1.5 flex-wrap">
-              {(['url', 'tcp', 'dns', 'icmp', 'push'] as const).map(k => (
+              {(['url', 'tcp', 'dns', 'doh', 'icmp', 'push'] as const).map(k => (
                 <button key={k} onClick={() => setForm({ ...form, kind: k })}
                   className={`pill ${form.kind === k ? '' : 'text-[var(--text-mute)]'}`}
                   style={form.kind === k ? { background: 'var(--accent-dim)', color: 'var(--accent)' } : { background: 'var(--neutral-bg)' }}>
@@ -361,6 +361,7 @@ export default function Probes() {
               placeholder={form.kind === 'url' ? t('pr.phTargetUrl')
                 : form.kind === 'tcp' ? t('pr.phTargetTcp')
                   : form.kind === 'dns' ? t('pr.phTargetDns')
+                    : form.kind === 'doh' ? t('pr.phTargetDoh')
                 : form.kind === 'icmp' ? t('pr.phTargetIcmp') : '—'}
               onChange={e => setForm({ ...form, target: e.target.value })} />
           </div>
@@ -368,14 +369,17 @@ export default function Probes() {
             <Ic name="plus" size={13} /> {t('pr.add')}
           </button>
         </div>
-        {/* DNS / Push 专属字段：DNS=解析器+记录类型+期望包含；Push=容忍窗口（其余条件不适用） */}
-        {(form.kind === 'dns' || form.kind === 'push') && (
+        {/* DNS / DoH / Push 专属字段：DNS|DoH=解析器+记录类型+期望包含；Push=容忍窗口（其余条件不适用） */}
+        {(form.kind === 'dns' || form.kind === 'doh' || form.kind === 'push') && (
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-2.5">
-            {form.kind === 'dns' ? (
+            {form.kind !== 'push' ? (
               <>
                 <div>
-                  <div className="text-[11px] text-[var(--text-faint)] mb-1">{t('pr.dnsResolver')}</div>
-                  <input className="input mono" placeholder="223.5.5.5" value={adv.dns_resolver}
+                  <div className="text-[11px] text-[var(--text-faint)] mb-1">
+                    {form.kind === 'doh' ? t('pr.dohResolver') : t('pr.dnsResolver')}
+                  </div>
+                  <input className="input mono" placeholder={form.kind === 'doh' ? 'https://1.1.1.1/dns-query' : '223.5.5.5'}
+                    value={adv.dns_resolver}
                     onChange={e => setAdv({ ...adv, dns_resolver: e.target.value })} />
                 </div>
                 <div>

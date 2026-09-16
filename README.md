@@ -14,9 +14,13 @@
 
 ![Fleet 总览](docs/screenshots/fleet.png)
 
-| 诊断中心（根因卡 + 证据链 + 提案审批） | 拨测（URL/TCP/DNS/ICMP/Push） | AI 对话（思考链/工具调用折叠展示） |
-|---|---|---|
-| ![](docs/screenshots/diagnostics.png) | ![](docs/screenshots/probes.png) | ![](docs/screenshots/chat.png) |
+| 拓扑视图（Hub 居中，按健康状态分层） | 诊断中心（根因卡 + 证据链 + 提案审批） |
+|---|---|
+| ![](docs/screenshots/topology.png) | ![](docs/screenshots/diagnostics.png) |
+
+| 拨测（URL/TCP/DNS/DoH/ICMP/Push） | AI 对话（思考链/工具调用折叠展示） |
+|---|---|
+| ![](docs/screenshots/probes.png) | ![](docs/screenshots/chat.png) |
 
 ## 📸 界面截图
 

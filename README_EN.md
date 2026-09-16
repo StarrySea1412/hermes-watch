@@ -10,9 +10,13 @@ English · [中文](README.md)
 
 ![Fleet overview](docs/screenshots/fleet.png)
 
-| Diagnostics (root-cause cards, evidence, approvals) | Probes (URL/TCP/DNS/ICMP/Push) | AI chat (thinking & tool calls, collapsed) |
-|---|---|---|
-| ![](docs/screenshots/diagnostics.png) | ![](docs/screenshots/probes.png) | ![](docs/screenshots/chat.png) |
+| Topology (hub-centered, layered by health) | Diagnostics (root-cause cards, evidence, approvals) |
+|---|---|
+| ![](docs/screenshots/topology.png) | ![](docs/screenshots/diagnostics.png) |
+
+| Probes (URL/TCP/DNS/DoH/ICMP/Push) | AI chat (thinking & tool calls, collapsed) |
+|---|---|
+| ![](docs/screenshots/probes.png) | ![](docs/screenshots/chat.png) |
 
 ## Why
 

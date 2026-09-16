@@ -1,7 +1,8 @@
-"""Service probes: URL / TCP / DNS / ICMP dial checks + push heartbeats.
+"""Service probes: URL / TCP / DNS / DoH / ICMP dial checks + push heartbeats.
 
 拨测监控（对标 Uptime Kuma 拨测 / Gatus 状态机，补「只管主机不管服务」的维度缺口）：
 - 目标：URL（GET，接受 http/https）、TCP（host:port 连通）、DNS（解析器 + 期望应答）、
+  DoH（RFC 8484，DNS over HTTPS，Kuma 没有的差异化项）、
   ICMP（IPv4 echo，Windows IcmpSendEcho / POSIX SOCK_DGRAM，均零特权零依赖）
 - 状态机（Gatus 式双阈值防抖）：
   连续 fail_threshold 次失败 → down；down 中连续 success_threshold 次成功 → up
@@ -186,6 +187,25 @@ async def dns_lookup(target: str, rrtype: str = "A", resolver: str = "",
     return _parse_response(data, qid)
 
 
+async def doh_lookup(target: str, rrtype: str = "A", resolver_url: str = "",
+                     timeout_s: float = 10.0) -> list[str]:
+    """DNS-over-HTTPS 查询（RFC 8484）：DNS 报文 POST 到 DoH 端点 → rdata 字符串列表。
+
+    resolver_url 形如 "https://1.1.1.1/dns-query"（留空走该默认）；复用 UDP DNS 的
+    线格式编解码（_build_query/_parse_response），不引 dnspython。失败抛异常由
+    run_probe 归一为拨测失败。"""
+    qtype = QTYPES[(rrtype or "A").upper()]
+    url = (resolver_url or "").strip() or "https://1.1.1.1/dns-query"
+    qid = int.from_bytes(os.urandom(2), "big")
+    async with httpx.AsyncClient(timeout=timeout_s) as cli:
+        r = await cli.post(url, content=_build_query(target, qtype, qid),
+                           headers={"Content-Type": "application/dns-message",
+                                    "Accept": "application/dns-message"})
+    if r.status_code != 200:
+        raise ValueError(f"HTTP {r.status_code}")
+    return _parse_response(r.content, qid)
+
+
 def _parse_response(data: bytes, qid: int) -> list[str]:
     """解析 DNS 应答 → answer 区 rdata 字符串列表（纯函数，离线可测）。
 
@@ -316,6 +336,13 @@ async def run_probe(p: dict) -> tuple[bool, float | None, str]:
     try:
         if p["kind"] == "dns":
             answers = await dns_lookup(target, p["dns_type"] or "A",
+                                       (p["dns_resolver"] or "").strip(), timeout_s)
+            latency = (time.perf_counter() - started) * 1000
+            ok, err = dns_check(answers, p["dns_expected"] or "")
+            return ok, latency, err
+        if p["kind"] == "doh":
+            # DoH：dns_resolver 字段复用为 DoH 端点 URL（留空 = 默认 1.1.1.1）
+            answers = await doh_lookup(target, p["dns_type"] or "A",
                                        (p["dns_resolver"] or "").strip(), timeout_s)
             latency = (time.perf_counter() - started) * 1000
             ok, err = dns_check(answers, p["dns_expected"] or "")

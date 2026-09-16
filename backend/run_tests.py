@@ -270,14 +270,17 @@ def t_metrics_rollup():
         data = client.get(f"/api/hosts/{hid1}?range_min=10080").json()
         check("7 天读取走小时桶（无原始行也返回）", bool(data.get("metrics")))
         if data.get("metrics"):
-            m = data["metrics"][0]
-            check("小时桶行结构正确（ts=整点）", m["ts"] == bucket and m["cpu"] is not None)
+            # 按桶精确找行（不能取 metrics[0]：整点边界附近，常驻面板进程可能把
+            # 下面插入的「当前小时」行聚合成 hid1 的更新小时桶，新→旧排序会插队）
+            mrow = next((x for x in data["metrics"] if x["ts"] == bucket), None)
+            check("小时桶行结构正确（ts=整点）", mrow is not None and mrow["cpu"] is not None)
         data2 = client.get(f"/api/hosts/{hid1}?range_min=240").json()
         # 原始行路径仍在（4h 范围内只有当前小时那条 99 行 → 也在窗内）
         check("短范围仍走原始行", isinstance(data2.get("metrics"), list))
     finally:
         for h in (hid1, hid2):
             db.execute("DELETE FROM metrics WHERE host_id=?", (h,))
+            db.execute("DELETE FROM metrics_hourly WHERE host_id=?", (h,))
             db.execute("DELETE FROM hosts WHERE id=?", (h,))
         db.execute("DELETE FROM metrics_hourly WHERE bucket=?", (bucket,))
         check("现场清理", not db.query_one(
@@ -1488,6 +1491,53 @@ def t_tg_ack():
         check("现场清理", not db.query_one("SELECT id FROM findings WHERE id=?", (f1,)))
 
 
+def t_doh():
+    """DoH 拨测（RFC 8484）：本地临时 DoH 端点 → 线格式编解码全链路（不出网）。"""
+    print("[doh]")
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from app import probes as pr
+
+    def _canned(qid: int) -> bytes:
+        # 手搓最小 DNS 应答：example.com A 93.184.216.34（.Question + 1 Answer）
+        name = b"\x07example\x03com\x00"
+        question = name + b"\x00\x01\x00\x01"
+        answer = name + b"\x00\x01\x00\x01" + (300).to_bytes(4, "big") \
+            + b"\x00\x04" + bytes([93, 184, 216, 34])
+        return qid.to_bytes(2, "big") + b"\x81\x80" + b"\x00\x01\x00\x01\x00\x00\x00\x00" \
+            + question + answer
+
+    class _H(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/dns-message")
+            self.end_headers()
+            self.wfile.write(_canned(int.from_bytes(body[:2], "big")))
+
+        def log_message(self, *a):
+            pass
+
+    srv = HTTPServer(("127.0.0.1", 0), _H)
+    url = f"http://127.0.0.1:{srv.server_address[1]}/dns-query"
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        answers = asyncio.run(pr.doh_lookup("example.com", "A", url, 5))
+        check("DoH 查询返回 A 记录", answers == ["93.184.216.34"])
+        ok, err = pr.dns_check(answers, "93.184")
+        check("期望子串命中", ok and not err)
+        ok2, lat, err2 = asyncio.run(pr.run_probe(
+            {"kind": "doh", "target": "example.com", "dns_type": "A",
+             "dns_expected": "93.184", "dns_resolver": url, "timeout_s": 5}))
+        check("run_probe doh 全链路（条件引擎）", ok2 and lat is not None and not err2)
+        ok3, _, err3 = asyncio.run(pr.run_probe(
+            {"kind": "doh", "target": "example.com", "dns_type": "A",
+             "dns_expected": "不存在的期望", "dns_resolver": url, "timeout_s": 5}))
+        check("期望不命中 → 失败带原因", not ok3 and "not in answers" in err3)
+    finally:
+        srv.shutdown()
+
+
 if __name__ == "__main__":
 
     db.init_db()
@@ -1526,5 +1576,6 @@ if __name__ == "__main__":
     t_rbac_endpoints()
     t_ports_biz()
     t_tg_ack()
+    t_doh()
     print(f"\n{PASS} passed, {FAIL} failed")
     sys.exit(1 if FAIL else 0)

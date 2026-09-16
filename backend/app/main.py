@@ -484,7 +484,7 @@ async def probe_add(p: ProbeIn):
     target = p.target.strip()
     if not name:
         raise HTTPException(400, i18n.t("名称不能为空", "Name is required"))
-    kind = p.kind if p.kind in ("url", "tcp", "dns", "icmp", "push") else "url"
+    kind = p.kind if p.kind in ("url", "tcp", "dns", "doh", "icmp", "push") else "url"
     if kind != "push" and not target:
         raise HTTPException(400, i18n.t("目标不能为空", "Target is required"))
     if kind == "url" and not target.startswith(("http://", "https://")):
@@ -492,18 +492,22 @@ async def probe_add(p: ProbeIn):
                                         "URL probe target must start with http:// or https://"))
     if kind == "tcp" and (":" not in target or not target.rpartition(":")[2].isdigit()):
         raise HTTPException(400, i18n.t("TCP 拨测目标格式为 主机:端口", "TCP probe target must be host:port"))
-    if kind == "dns":
+    if kind in ("dns", "doh"):
         if "/" in target or " " in target:
             raise HTTPException(400, i18n.t("DNS 拨测目标应为待解析域名", "DNS probe target must be a hostname"))
-        if not (p.dns_resolver or "").strip():
+        if kind == "dns" and not (p.dns_resolver or "").strip():
             raise HTTPException(400, i18n.t("DNS 拨测须指定解析器（如 223.5.5.5）",
                                             "DNS probe requires a resolver (e.g. 223.5.5.5)"))
+        if kind == "doh" and (p.dns_resolver or "").strip() \
+                and not (p.dns_resolver or "").strip().startswith(("http://", "https://")):
+            raise HTTPException(400, i18n.t("DoH 解析器应为 https:// 端点 URL（如 https://1.1.1.1/dns-query）",
+                                            "DoH resolver must be an https:// endpoint URL (e.g. https://1.1.1.1/dns-query)"))
     if db.query_one("SELECT id FROM probes WHERE name=?", (name,)):
         raise HTTPException(400, i18n.t(f"同名拨测已存在: {name}", f"A probe named {name} already exists"))
     if kind == "tcp" and (p.keyword or p.max_latency_ms or p.cert_days_min):
         raise HTTPException(400, i18n.t("条件引擎仅适用于 URL 拨测",
                                         "Conditions apply to URL probes only"))
-    if kind == "dns" and ((p.dns_type or "A").upper() not in probes.QTYPES):
+    if kind in ("dns", "doh") and ((p.dns_type or "A").upper() not in probes.QTYPES):
         raise HTTPException(400, i18n.t("DNS 记录类型不支持", "DNS record type not supported"))
     if p.interval_s and p.interval_s < 15:
         raise HTTPException(400, i18n.t("独立周期不能低于 15 秒", "Per-probe interval must be ≥ 15s"))
