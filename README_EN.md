@@ -84,6 +84,8 @@ npm run dev                          # http://localhost:5273
 
 First start seeds a 4-host demo fleet (web-1 healthy / db-1 disk full / app-1 memory leak / cache-1 suspicious login) and auto-triggers diagnosis — the full alert → diagnosis → proposal pipeline works out of the box.
 
+**Public read-only demo site**: want to click around before self-hosting? See [`docs/demo-site.md`](docs/demo-site.md) — `docker compose -f compose.demo.yml up -d --build` starts a read-only demo instance (`HW_DEMO_MODE=on`: all GETs allowed, writes rejected with 423, secret fields masked at the API boundary, frontend renders a read-only view). Put it behind HTTPS and link it from your README or community post.
+
 **Connecting real servers**: generate a token in the Enroll page and run the [Go agent](agent-go/README.md) on the target (or the `hermes-watch-agent.sh` pure sh+curl variant) — no inbound ports needed; or add SSH hosts in Settings. Point an MCP client (Claude Desktop / Cursor) at `http://127.0.0.1:8800/api/mcp` to query inspection data from your editor.
 
 ## vs. all-in-one AIOps

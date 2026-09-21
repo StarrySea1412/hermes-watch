@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { lazy, Suspense, createContext, useContext, useEffect, useState } from 'react'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { api } from './api'
 import { useT } from './i18n'
@@ -39,15 +39,22 @@ function PageFallback() {
 
 type GateState = 'loading' | 'ok' | 'locked'
 
+// 演示站只读模式（后端 HW_DEMO_MODE=on，/auth/status 回带）：全站写操作已由后端 423 拦截，
+// 前端同步降级为 observer 视图——写入口直接不渲染，只留「看」的全部能力
+export const DemoCtx = createContext(false)
+export const useDemoMode = () => useContext(DemoCtx)
+
 function Gate() {
   const [state, setState] = useState<GateState>('loading')
   const [role, setRole] = useState<Role>('admin')
+  const [demo, setDemo] = useState(false)
   useEffect(() => {
-    api<{ enabled: boolean; authenticated: boolean; role: string }>('/auth/status')
+    api<{ enabled: boolean; authenticated: boolean; role: string; demo_mode?: boolean }>('/auth/status')
       .then(s => {
         // 访问控制未开启 = 单人本机模式，按 admin 全量展示；登录跳转走整页刷新，
-        // 所以角色只在 Gate 挂载时取一次即可
+        // 所以角色只在 Gate 挂载时取一次即可。演示站一律按只读视图渲染
         setRole(!s.enabled || s.role === 'admin' ? 'admin' : s.role === 'operator' ? 'operator' : 'observer')
+        setDemo(!!s.demo_mode)
         setState(s.enabled && !s.authenticated ? 'locked' : 'ok')
       })
       .catch(() => setState('ok')) // 后端不可达时仍渲染界面，由各页面的报错兜底
@@ -57,8 +64,9 @@ function Gate() {
   return (
     <ErrorBoundary>
       <Suspense fallback={<PageFallback />}>
-        <RoleCtx.Provider value={role}>
-          <Routes>
+        <RoleCtx.Provider value={demo ? 'observer' : role}>
+          <DemoCtx.Provider value={demo}>
+        <Routes>
           <Route element={<Layout />}>
             <Route path="/" element={<Fleet />} />
             <Route path="/topology" element={<Topology />} />
@@ -73,6 +81,7 @@ function Gate() {
             <Route path="/settings" element={<Settings />} />
           </Route>
         </Routes>
+          </DemoCtx.Provider>
         </RoleCtx.Provider>
       </Suspense>
     </ErrorBoundary>

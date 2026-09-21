@@ -1,0 +1,31 @@
+# 公开演示站：单容器跑全套（mock 模拟器 + 托管前端），只读模式
+# 用法：docker compose -f compose.demo.yml up -d --build
+# 之后建议套一层反代（Caddy/Nginx）做 HTTPS，再挂到 README/社区帖的 demo 链接上。
+#
+# HW_DEMO_MODE=on 的语义（见 backend/app/main.py）：
+#   - GET 全放行：访客看个够（巡检曲线/根因卡/拓扑/拨测/报告/公开状态页）
+#   - 一切写操作回 423：登录后也改不动（加主机/审批/执行/改设置全部禁用）
+#   - 密钥类字段在 GET 出口脱敏：LLM key / webhook URL / 状态页 token 不外泄
+#   - 前端 /auth/status 回带 demo_mode，整站按只读视图渲染（导航隐藏写入口）
+# 演示数据：首次启动 seed 4 台 mock 主机（web/db/app/cache，各带一种病症），
+# 巡检循环实时生成行走曲线，拨测/告警/诊断全链路可看，重启即回初始剧本。
+#
+# AI 对话：演示机上请把 Base URL 指向 mock_llm（容器内未内置，防 API 费用被薅——
+# 需要演示 AI 叙事时另起一个 python backend/mock_llm.py 容器并在设置页指向它，
+# 或干脆保持 AI 外发关闭：对话页自动降级为本地规则引擎摘要，同样可看）。
+
+services:
+  hermes-demo:
+    build: .
+    container_name: hermes-watch-demo
+    environment:
+      - HW_DEMO_MODE=on
+      - HW_LISTEN=0.0.0.0
+    ports:
+      - "8800:8800"
+    volumes:
+      - demo-data:/data
+    restart: unless-stopped
+
+volumes:
+  demo-data:

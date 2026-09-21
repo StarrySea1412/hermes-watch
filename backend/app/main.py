@@ -47,10 +47,25 @@ AUTH_OPEN = ("/api/auth/status", "/api/auth/login",
 # AI 对话；其余写操作（用户/主机/设置/备份/LLM 配置等）仍需 admin
 OPERATOR_WRITE = ("/api/proposals", "/api/findings", "/api/probes", "/api/chat")
 
+# 公开演示站写保护（HW_DEMO_MODE=on）：GET 全放行看个够，一切写操作回 423。
+# 与访问控制正交：演示站通常再叠一层口令（或直接公开只读），这里保证的是
+# 「互联网上任何人拿到会话/口令也改不动这台演示机」——修复动作全链路可视化不受影响
+# （approve/execute 是写操作，演示站上按只读引导，真正的审批闭环请自部署体验）
+DEMO_MODE = os.environ.get("HW_DEMO_MODE", "").lower() in ("1", "on", "true")
+# 演示模式放行的例外写路径：无（登录流程自身在 GET /api/auth/status 之外按需放行）
+DEMO_WRITE_OPEN = ("/api/auth/login", "/api/auth/logout", "/api/auth/self/password")
+
 
 @app.middleware("http")
 async def panel_auth_middleware(request: Request, call_next):
     path = request.url.path
+    # 演示模式写保护在会话门之前：不管登录与否，非白名单写一律 423
+    if DEMO_MODE and request.method not in ("GET", "HEAD", "OPTIONS") \
+            and path.startswith("/api") and not path.startswith(DEMO_WRITE_OPEN) \
+            and not path.startswith("/api/push/"):
+        return JSONResponse({"detail": i18n.t("演示站为只读模式，写操作已禁用——欢迎自部署体验完整闭环",
+                                             "Demo site is read-only — self-host to try the full loop"),
+                            "demo_readonly": True}, status_code=423)
     # 公开端点兜底限流（token 门禁之外的防滥用层）+ 访问审计（内存环形缓冲）
     if any(path.startswith(p) for p in ("/badge/", "/status/", "/api/push/", "/api/agent/push")):
         ip = request.client.host if request.client else "-"
@@ -394,6 +409,11 @@ async def reports_clear():
 def get_settings():
     rows = dict((r["key"], r["value"]) for r in db.query("SELECT key,value FROM settings"))
     rows.setdefault("ai_outbound", "off")
+    if DEMO_MODE:
+        # 演示站 GET 是敞开的：密钥类字段绝不外泄（页面按 observer 视图渲染，本也用不到）
+        for k in ("ai_provider", "webhook_url", "telegram_chat_id", "panel_password", "status_token"):
+            if k in rows:
+                rows[k] = ""
     return rows
 
 
@@ -413,8 +433,11 @@ async def set_settings(payload: dict):
 # ---------- notification channels ----------
 @app.get("/api/notify/channels")
 def notify_channels():
+    c = notify.conf()
+    if DEMO_MODE:  # 演示站敞开 GET：webhook 地址与 chat_id 不外泄，渠道类型可看
+        c = {**c, "url": "", "chat_id": ""}
     return {"labels": notify.LABELS, "configured": notify.configured(),
-            **notify.conf()}
+            **c}
 
 
 @app.post("/api/notify/test")
@@ -759,7 +782,7 @@ class LoginIn(BaseModel):
 async def auth_status(request: Request):
     role = auth.session_role(request.cookies.get(auth.COOKIE, ""))
     return {"enabled": auth.enabled(), "authenticated": bool(role), "role": role,
-            "multi_user": auth.has_users()}
+            "multi_user": auth.has_users(), "demo_mode": DEMO_MODE}
 
 
 @app.post("/api/auth/login")
@@ -1137,7 +1160,7 @@ async def agent_push_body(request: Request):
 @app.get("/api/status/token")
 def status_token_info():
     tok = (db.query_one("SELECT value FROM settings WHERE key='status_token'") or {}).get("value") or ""
-    return {"enabled": bool(tok), "token": tok}
+    return {"enabled": bool(tok), "token": "" if DEMO_MODE else tok}
 
 
 @app.post("/api/status/token")

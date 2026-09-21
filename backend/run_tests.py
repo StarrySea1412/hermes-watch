@@ -1538,6 +1538,62 @@ def t_doh():
         srv.shutdown()
 
 
+def t_demo_mode():
+    """演示站只读模式（HW_DEMO_MODE）：写全拦 423、GET 出口脱敏、login 例外放行。
+    模式位是模块级常量（进程启动即定），这里 monkeypatch 后用 TestClient 直打
+    中间件/端点，结束还原现场。"""
+    print("[demo-mode]")
+    from fastapi.testclient import TestClient
+    from app import main as web
+
+    SENSITIVE = ("ai_provider", "webhook_url", "telegram_chat_id", "status_token")
+    snap = {r["key"]: r["value"] for r in db.query(
+        f"SELECT key, value FROM settings WHERE key IN {SENSITIVE}")}
+    was = web.DEMO_MODE
+    web.DEMO_MODE = True
+    try:
+        client = TestClient(web.app)
+
+        r = client.get("/api/auth/status")
+        check("auth/status 回带 demo_mode", r.json().get("demo_mode") is True)
+        r = client.get("/api/fleet")
+        check("GET fleet 放行（只读看个够）", r.status_code == 200)
+
+        for method, path, body in (
+                ("post", "/api/hosts", {"name": "__t_demo__", "hostname": "1.2.3.4"}),
+                ("post", "/api/settings", {"__t_key__": "1"}),
+                ("post", "/api/probes", {"name": "__t__", "target": "http://x", "kind": "url"}),
+                ("post", "/api/reports/generate", None),
+                ("delete", "/api/demo", None)):
+            r = getattr(client, method)(path, json=body) if body is not None else getattr(client, method)(path)
+            check(f"demo 模式 {method.upper()} {path} → 423", r.status_code == 423)
+
+        r = client.post("/api/auth/login", json={"username": "", "password": "whatever"})
+        check("login 不受写保护（走自己的鉴权）", r.status_code != 423)
+
+        # push token 通道豁免：拨测 push 上报属于数据面，不因演示模式断链
+        r = client.get("/api/push/__no_such_token__")
+        check("push 上报豁免写保护（404=token 无效，非 423）", r.status_code == 404)
+
+        # GET 出口脱敏：密钥类字段即便在库里也绝不回传
+        db.execute("INSERT INTO settings(key,value) VALUES('webhook_url','https://secret.example/hook') "
+                   "ON CONFLICT(key) DO UPDATE SET value='https://secret.example/hook'")
+        r = client.get("/api/settings")
+        j = r.json()
+        check("settings 密钥字段脱敏", j.get("webhook_url", "") == "")
+        r = client.get("/api/notify/channels")
+        check("notify/channels 不带真实 webhook", r.json().get("url", "") == "")
+    finally:
+        web.DEMO_MODE = was
+        for k in SENSITIVE:
+            if k in snap:
+                db.execute("INSERT INTO settings(key,value) VALUES(?,?) "
+                           "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (k, snap[k]))
+            else:
+                db.execute("DELETE FROM settings WHERE key=?", (k,))
+        check("demo 模式现场已还原", web.DEMO_MODE == was)
+
+
 if __name__ == "__main__":
 
     db.init_db()
@@ -1577,5 +1633,6 @@ if __name__ == "__main__":
     t_ports_biz()
     t_tg_ack()
     t_doh()
+    t_demo_mode()
     print(f"\n{PASS} passed, {FAIL} failed")
     sys.exit(1 if FAIL else 0)

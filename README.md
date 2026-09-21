@@ -81,6 +81,8 @@ npm run dev                          # http://localhost:5273
 
 首次启动自动播种 4 台演示主机（web-1 健康 / db-1 磁盘填满 / app-1 内存泄漏 / cache-1 可疑登录），并自动触发诊断。
 
+**公开演示站（只读）**：想先摸摸界面再决定是否自部署，看 [`docs/demo-site.md`](docs/demo-site.md)——`docker compose -f compose.demo.yml up -d --build` 一条命令起一台只读演示站（`HW_DEMO_MODE=on`：GET 全放行、写操作一律 423、密钥类字段出口脱敏、前端自动降级只读视图），挂到公网给 README / 社区帖的访客 30 秒上手。
+
 ## 演示故事线（3 分钟）
 
 1. 打开 `Fleet 总览`：db-1/app-1/cache-1 卡片告警，事件流实时滚动

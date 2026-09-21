@@ -4,6 +4,7 @@ import { useTheme } from 'next-themes'
 import { subscribe } from './api'
 import { getLang, setLang, useT, type Lang } from './i18n'
 import { Ic, type IconName } from './icons'
+import { useDemoMode } from './App'
 
 /* 图表组件（useEChart/HealthRing/Spark/LineChart）在 ./charts.tsx —— 独立模块
    让 echarts 只进异步 chunk，主包不背 1MB。页面从 '../charts' 导入。 */
@@ -126,6 +127,20 @@ function SidebarInner({ onNavigate }: { onNavigate?: () => void }) {
   )
 }
 
+/** 演示站只读横幅：沿顶边全宽一条（桌面+移动共用），黑色终端风弱化存在感 */
+export function DemoBanner() {
+  const demo = useDemoMode()
+  const { t } = useT()
+  if (!demo) return null
+  return (
+    <div className="shrink-0 h-7 flex items-center justify-center gap-2 px-3 border-b border-[var(--border)]"
+      style={{ background: 'var(--accent-dim)' }}>
+      <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: 'var(--warn)' }} />
+      <span className="text-[11px] text-[var(--text-mute)] truncate">{t('demo.banner')}</span>
+    </div>
+  )
+}
+
 export function Layout() {
   const [flash, setFlash] = useState('')
   const [menuOpen, setMenuOpen] = useState(false)
@@ -181,6 +196,7 @@ export function Layout() {
 
   return (
     <div className="flex h-screen overflow-hidden">
+      <DemoBanner />
       {/* 桌面侧栏（≥lg） */}
       <aside className="hidden lg:flex w-60 shrink-0 border-r border-[var(--border)] flex-col p-4 gap-1 glass-bar">
         <SidebarInner />
