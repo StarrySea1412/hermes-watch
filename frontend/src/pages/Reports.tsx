@@ -21,7 +21,7 @@ export default function Reports() {
 
   const gen = async () => {
     setBusy(true)
-    try { await api('/reports/generate', { method: 'POST' }); load() } finally { setBusy(false) }
+    try { await api('/reports/generate', { method: 'POST' }); load() } catch (e: any) { alert(e.message) } finally { setBusy(false) }
   }
   const del = async () => {
     if (!pendingDel) return

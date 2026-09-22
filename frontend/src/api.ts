@@ -45,7 +45,15 @@ export async function api<T>(path: string, opts?: RequestInit): Promise<T> {
     if (!location.pathname.startsWith('/login')) { location.href = '/login' }
     throw new Error('面板未登录')
   }
-  if (!r.ok) throw new Error(`${await r.text() || r.status}`)
+  if (!r.ok) {
+    // demo 只读模式：后端 423 时抛标记异常（沿用后端中文提示），调用方 catch 后静默跳过即可
+    if (r.status === 423) {
+      const body = await r.json().catch(() => null)
+      const e = new Error(body?.detail || '演示站只读模式'); (e as any).demoBlocked = true
+      throw e
+    }
+    throw new Error(`${await r.text() || r.status}`)
+  }
   return r.json()
 }
 

@@ -65,17 +65,17 @@ export default function Diagnostics() {
 
   const analyze = async (fid: number) => {
     setBusy(true); setOpenStep(0)
-    try { await api(`/findings/${fid}/analyze`, { method: 'POST' }) } finally { setBusy(false); load() }
+    try { await api(`/findings/${fid}/analyze`, { method: 'POST' }) } catch (e: any) { alert(e.message) } finally { setBusy(false); load() }
   }
   const decide = async (pid: number, action: 'approve' | 'reject') => {
     setBusy(true)
     try { await api(`/proposals/${pid}/decide`, { method: 'POST', body: JSON.stringify({ action }) }) }
-    finally { setBusy(false); load() }
+    catch (e: any) { alert(e.message) } finally { setBusy(false); load() }
   }
   const execute = async (pid: number) => {
     setBusy(true)
     try { await api(`/proposals/${pid}/execute`, { method: 'POST' }) }
-    finally { setBusy(false); load() }
+    catch (e: any) { alert(e.message) } finally { setBusy(false); load() }
   }
   const copyCmd = async (text: string) => {
     try { await navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500) } catch { /* noop */ }
@@ -179,7 +179,7 @@ export default function Diagnostics() {
                 )}
                 {current.status !== 'resolved' && !current.acked_at && (
                   <button disabled={busy} title={t('diag.ackTitle')}
-                    onClick={() => api(`/findings/${current.id}/ack`, { method: 'POST' }).then(load).catch(() => { /* noop */ })}
+                    onClick={() => api(`/findings/${current.id}/ack`, { method: 'POST' }).then(load).catch(e => alert(e.message))}
                     className="btn shrink-0" style={{ background: 'var(--neutral-bg)', color: 'var(--text-mute)' }}>
                     <Ic name="check-circle" size={13} /> {t('btn.confirm')}
                   </button>

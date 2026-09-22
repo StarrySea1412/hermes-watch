@@ -57,7 +57,7 @@ export default function Fleet() {
   return (
     <div className="fade-in">
       <PageHead title={t('fleet.title')} sub={t('fleet.hosts', { n: hosts.length }) + ' · 60s · 100% local'}>
-        <button className="btn btn-primary" onClick={() => api('/reports/generate', { method: 'POST' }).then(() => nav('/reports'))}>
+        <button className="btn btn-primary" onClick={() => api('/reports/generate', { method: 'POST' }).then(() => nav('/reports')).catch(e => alert(e.message))}>
           {t('btn.generate')}
         </button>
       </PageHead>

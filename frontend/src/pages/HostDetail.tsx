@@ -317,7 +317,7 @@ export default function HostDetail() {
                                 <button className="text-[11.5px] text-[var(--text-faint)] hover:text-[var(--accent)]"
                                   title={t('hd.addToBaselineTitle')}
                                   onClick={() => api(`/hosts/${id}/ports/baseline`, { method: 'POST', body: JSON.stringify({ ports: [p.port] }) })
-                                    .then(() => setPortInfo(null))}>{t('hd.addToBaseline')}</button>
+                                    .then(() => setPortInfo(null)).catch(e => alert(e.message))}>{t('hd.addToBaseline')}</button>
                               )}
                             </td>
                           </tr>
