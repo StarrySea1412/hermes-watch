@@ -195,40 +195,42 @@ export function Layout() {
   }, [])
 
   return (
-    <div className="flex h-screen overflow-hidden">
+    <div className="flex flex-col h-screen overflow-hidden">
       <DemoBanner />
-      {/* 桌面侧栏（≥lg） */}
-      <aside className="hidden lg:flex w-60 shrink-0 border-r border-[var(--border)] flex-col p-4 gap-1 glass-bar">
-        <SidebarInner />
-      </aside>
-      {/* 移动端抽屉侧栏（<lg），点导航或遮罩关闭 */}
-      {menuOpen && <div className="lg:hidden fixed inset-0 z-40 bg-black/55" onClick={() => setMenuOpen(false)} />}
-      <aside className={`lg:hidden fixed inset-y-0 left-0 z-50 w-64 max-w-[82vw] border-r border-[var(--border)] flex flex-col p-4 gap-1 glass-bar-strong transition-transform duration-200 ${menuOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-        <SidebarInner onNavigate={() => setMenuOpen(false)} />
-      </aside>
-      <div className="flex-1 flex flex-col min-w-0">
-        {/* 移动端顶栏（<lg） */}
-        <header className="lg:hidden shrink-0 h-14 flex items-center gap-3 px-4 border-b border-[var(--border)] glass-bar">
-          <button className="btn btn-ghost" style={{ padding: '6px 10px' }}
-            onClick={() => setMenuOpen(true)} aria-label={t('ui.menu.open')}><Ic name="menu" size={17} /></button>
-          <div className="font-bold text-[14px] text-[var(--text-hi)] tracking-wide flex items-center gap-2 min-w-0">
-            <span>🐚</span><span className="truncate">Hermes Watch</span>
-          </div>
-          <span className="ml-auto flex items-center gap-1.5 text-[10.5px] text-[var(--text-faint)]">
-            <span className="pulse-dot" style={{ background: 'var(--ok)' }} />{t('ui.status.running')}
-          </span>
-        </header>
-        <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-7 relative min-w-0 glass-sheet">
-          {flash && (
-            <div className="absolute top-5 right-4 sm:right-7 left-4 sm:left-auto z-50 fade-in flex sm:justify-end">
-              <div className="card px-4 py-2.5 flex items-center gap-2.5" style={{ borderColor: 'var(--crit-bg)' }}>
-                <span className="pulse-dot" style={{ background: 'var(--crit)' }} />
-                <span className="text-[13px] text-[var(--text)]">{flash}</span>
-              </div>
+      <div className="flex flex-1 min-h-0">
+        {/* 桌面侧栏（≥lg） */}
+        <aside className="hidden lg:flex w-60 shrink-0 border-r border-[var(--border)] flex-col p-4 gap-1 glass-bar">
+          <SidebarInner />
+        </aside>
+        {/* 移动端抽屉侧栏（<lg），点导航或遮罩关闭 */}
+        {menuOpen && <div className="lg:hidden fixed inset-0 z-40 bg-black/55" onClick={() => setMenuOpen(false)} />}
+        <aside className={`lg:hidden fixed inset-y-0 left-0 z-50 w-64 max-w-[82vw] border-r border-[var(--border)] flex flex-col p-4 gap-1 glass-bar-strong transition-transform duration-200 ${menuOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+          <SidebarInner onNavigate={() => setMenuOpen(false)} />
+        </aside>
+        <div className="flex-1 flex flex-col min-w-0">
+          {/* 移动端顶栏（<lg） */}
+          <header className="lg:hidden shrink-0 h-14 flex items-center gap-3 px-4 border-b border-[var(--border)] glass-bar">
+            <button className="btn btn-ghost" style={{ padding: '6px 10px' }}
+              onClick={() => setMenuOpen(true)} aria-label={t('ui.menu.open')}><Ic name="menu" size={17} /></button>
+            <div className="font-bold text-[14px] text-[var(--text-hi)] tracking-wide flex items-center gap-2 min-w-0">
+              <span>🐚</span><span className="truncate">Hermes Watch</span>
             </div>
-          )}
-          <Outlet />
-        </main>
+            <span className="ml-auto flex items-center gap-1.5 text-[10.5px] text-[var(--text-faint)]">
+              <span className="pulse-dot" style={{ background: 'var(--ok)' }} />{t('ui.status.running')}
+            </span>
+          </header>
+          <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-7 relative min-w-0 glass-sheet">
+            {flash && (
+              <div className="absolute top-5 right-4 sm:right-7 left-4 sm:left-auto z-50 fade-in flex sm:justify-end">
+                <div className="card px-4 py-2.5 flex items-center gap-2.5" style={{ borderColor: 'var(--crit-bg)' }}>
+                  <span className="pulse-dot" style={{ background: 'var(--crit)' }} />
+                  <span className="text-[13px] text-[var(--text)]">{flash}</span>
+                </div>
+              </div>
+            )}
+            <Outlet />
+          </main>
+        </div>
       </div>
     </div>
   )
