@@ -1491,6 +1491,133 @@ def t_tg_ack():
         check("现场清理", not db.query_one("SELECT id FROM findings WHERE id=?", (f1,)))
 
 
+def t_tg_cmd():
+    """IM 双向 v2（tg_command）：status/ask/diag/approve/reject/help 全链路
+    （伪 Telegram 回执：monkeypatch _tg_call，不出网；settings 现场免疫）。"""
+    print("[tg-cmd]")
+    import asyncio
+    from app import notify, scheduler
+    # ---- 纯函数：parse_int_arg
+    check("diag 12 → (True,12)", notify.parse_int_arg("diag 12", ("diag", "诊断")) == (True, 12))
+    check("诊断：12 → (True,12)", notify.parse_int_arg("诊断：12", ("diag", "诊断")) == (True, 12))
+    check("approve #5 → (True,5)", notify.parse_int_arg("approve #5", ("approve", "批准", "同意")) == (True, 5))
+    check("裸 approve → (True,None)", notify.parse_int_arg("approve", ("approve",)) == (True, None))
+    check("垃圾 ID → (True,None)", notify.parse_int_arg("diag abc", ("diag",)) == (True, None))
+    check("非命令 → (False,None)", notify.parse_int_arg("你好", ("diag",)) == (False, None))
+
+    keys = ["notify_channel", "webhook_url", "telegram_chat_id", "tg_command", "tg_ack",
+            "ai_outbound", "ai_provider", "hw_lang"]
+    saved = {k: (db.query_one("SELECT value FROM settings WHERE key=?", (k,)) or {}).get("value") for k in keys}
+    sent: list[dict] = []
+
+    def fake_call(url, method, **payload):
+        sent.append(payload)
+        return {"ok": True, "result": []}
+
+    real_call = notify._tg_call
+    notify._tg_call = fake_call
+    try:
+        for k, v in [("notify_channel", "telegram"), ("webhook_url", "TESTTOKEN"),
+                     ("telegram_chat_id", "-100999"), ("tg_command", "on"),
+                     ("ai_outbound", "off"), ("hw_lang", "zh"),
+                     ("ai_provider", '{"base_url":"http://127.0.0.1:9/v1"}')]:
+            db.execute("INSERT INTO settings(key,value) VALUES(?,?) "
+                       "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (k, v))
+        hid = db.execute(
+            "INSERT INTO hosts(name,hostname,group_name,mock,created_at) VALUES('__t_tgv2__','x','t',1,?)",
+            (db.now(),))
+        fid = db.execute(
+            "INSERT INTO findings(host_id,ts,type,severity,title,detail,evidence) VALUES(?,?,?,?,?,?,?)",
+            (hid, db.now(), "memory", "crit", "【测试v2】内存", "test", "{}"))
+        check("现场搭建", bool(hid) and bool(fid))
+        # chat_id 白名单：陌生 chat 不听指挥
+        asyncio.run(notify._handle_tg_command("status", "-100OTHER"))
+        check("陌生 chat 静默", sent == [])
+        # v2 开关关闭 → status 不消费（v1 语义不外溢）
+        db.execute("UPDATE settings SET value='off' WHERE key='tg_command'")
+        asyncio.run(notify._handle_tg_command("status", "-100999"))
+        check("v2 关：status 不消费", sent == [])
+        db.execute("UPDATE settings SET value='on' WHERE key='tg_command'")
+        # status 概览（复用 fleet_snapshot）
+        asyncio.run(notify._handle_tg_command("status", "-100999"))
+        check("status 概览回执", len(sent) == 1 and "概览" in sent[0].get("text", "")
+              and "在线" in sent[0]["text"])
+        # help 菜单
+        sent.clear()
+        asyncio.run(notify._handle_tg_command("/help", "-100999"))
+        check("help 菜单", len(sent) == 1 and "可用命令" in sent[0]["text"])
+        # ask：AI 关 → chat_answer 自动降级规则引擎摘要（与面板同一链路），不出网
+        sent.clear()
+        asyncio.run(notify._handle_tg_command("ask 机房现在怎么样？", "-100999"))
+        check("ask 降级规则摘要", len(sent) == 1 and "AI 外发未开启" in sent[0]["text"])
+        # diag：mock 主机全链路诊断 + 提案生成 + 审批提示
+        sent.clear()
+        asyncio.run(notify._handle_tg_command(f"diag {fid}", "-100999"))
+        txt = sent[0].get("text", "") if sent else ""
+        check("diag 诊断回执", "诊断完成" in txt and "__t_tgv2__" in txt)
+        card = db.uj((db.query_one("SELECT card FROM findings WHERE id=?", (fid,)) or {}).get("card"), {})
+        pid = card.get("proposal_id")
+        check("diag 产出提案且回执带审批提示", bool(pid) and f"approve {pid}" in txt)
+        # approve：pending → approved（批准 ≠ 执行，状态不触发 executor）
+        sent.clear()
+        asyncio.run(notify._handle_tg_command(f"approve {pid}", "-100999"))
+        st = (db.query_one("SELECT status FROM proposals WHERE id=?", (pid,)) or {}).get("status")
+        check("approve → approved", st == "approved" and "已批准" in (sent[0]["text"] if sent else ""))
+        # 重复处理拦截
+        sent.clear()
+        asyncio.run(notify._handle_tg_command(f"approve {pid}", "-100999"))
+        check("重复 approve → 已处理提示", len(sent) == 1 and "已处理" in sent[0]["text"])
+        # 裸 approve = 待批清单
+        pid2 = db.execute(
+            "INSERT INTO proposals(ts,host_id,finding_id,title,command,rationale) VALUES(?,?,?,?,?,?)",
+            (db.now(), hid, fid, "test proposal", "echo hi", "r"))
+        sent.clear()
+        asyncio.run(notify._handle_tg_command("批准", "-100999"))
+        check("裸 approve 列待批清单", len(sent) == 1 and f"#{pid2}" in sent[0]["text"])
+        # reject
+        sent.clear()
+        asyncio.run(notify._handle_tg_command(f"reject {pid2}", "-100999"))
+        st2 = (db.query_one("SELECT status FROM proposals WHERE id=?", (pid2,)) or {}).get("status")
+        check("reject → rejected", st2 == "rejected")
+        # 不存在的提案
+        sent.clear()
+        asyncio.run(notify._handle_tg_command("approve 987654", "-100999"))
+        check("approve 未知 ID 提示", len(sent) == 1 and "不存在" in sent[0]["text"])
+        # 未知斜杠命令 → 菜单；非命令文本保持静默
+        sent.clear()
+        asyncio.run(notify._handle_tg_command("/start", "-100999"))
+        check("未知斜杠命令回菜单", len(sent) == 1 and "可用命令" in sent[0]["text"])
+        sent.clear()
+        asyncio.run(notify._handle_tg_command("随便聊聊", "-100999"))
+        check("非命令静默", sent == [])
+        # scheduler.broadcast 转发（v1 ack 广播 AttributeError 被裸 except 吞掉的根因修复）
+        async def _bc():
+            outs = []
+
+            async def rec(kind, msg, data=None):
+                outs.append((kind, msg))
+
+            scheduler.set_broadcaster(rec)
+            await scheduler.broadcast("t", "m", {})
+            scheduler.set_broadcaster(None)
+            await scheduler.broadcast("t", "m", {})  # 未注入 → 静默
+            return outs
+        outs = asyncio.run(_bc())
+        check("scheduler.broadcast 注入/静默", len(outs) == 1 and outs[0][0] == "t")
+    finally:
+        notify._tg_call = real_call
+        for k, v in saved.items():
+            if v is None:
+                db.execute("DELETE FROM settings WHERE key=?", (k,))
+            else:
+                db.execute("INSERT INTO settings(key,value) VALUES(?,?) "
+                           "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (k, v))
+        db.execute("DELETE FROM proposals WHERE host_id=?", (hid,))
+        db.execute("DELETE FROM findings WHERE id=?", (fid,))
+        db.execute("DELETE FROM hosts WHERE id=?", (hid,))
+        check("现场清理", not db.query_one("SELECT id FROM hosts WHERE id=?", (hid,)))
+
+
 def t_doh():
     """DoH 拨测（RFC 8484）：本地临时 DoH 端点 → 线格式编解码全链路（不出网）。"""
     print("[doh]")
@@ -1632,6 +1759,7 @@ if __name__ == "__main__":
     t_rbac_endpoints()
     t_ports_biz()
     t_tg_ack()
+    t_tg_cmd()
     t_doh()
     t_demo_mode()
     print(f"\n{PASS} passed, {FAIL} failed")

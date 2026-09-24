@@ -9,9 +9,18 @@ SMTP 用 Shoutrrr 式单字段打包进 webhook_url（与拨测 URL 同一输入
     smtp://user:pass@smtp.gmail.com:587?to=me@example.com&from=alert@example.com
     端口 465 走 SMTP_SSL，其余端口 STARTTLS。
 
-IM 双向（v1 仅 Telegram）：tg_ack=on 时启动长轮询循环（getUpdates，无需公网
-回调 URL），回复 `ack <finding_id>` = 确认告警（停止 crit 周期重发）；`list`
+IM 双向（仅 Telegram，零公网回调）：长轮询循环 getUpdates。
+v1（tg_ack=on）：回复 `ack <finding_id>` = 确认告警（停止 crit 周期重发）；`list`
 = 当前未确认 crit 清单。通知附 ID 才可 ack——crit 聚合通知尾部带「ack: 3,7」。
+v2（tg_command=on，默认关——命令面能审批/诊断，须显式授权）：
+    status － 集群概览（在线/均分/crit·warn 计数/最需关注主机）
+    ask <问题> － 与面板 /api/chat 同一 chat_answer 链路（脱敏/工具循环/AI
+      关闭自动降级规则摘要全继承），回答直接回进聊天
+    diag <发现ID> － 立即跑诊断流水线并回传根因（规则引擎结论，AI 仅附加视角）
+    approve|reject [提案ID] － 审批提案（裸命令=待批清单）；批准 ≠ 执行，执行仍
+      须在面板显式触发——IM 侧永不直接改机器，铁律不破
+    help － 命令菜单
+只听配置的 telegram_chat_id（防陌生人指挥面板）；回执超 4096 截断。
 """
 import asyncio
 import datetime
@@ -235,6 +244,21 @@ def parse_ack(text: str) -> list[int]:
     return []
 
 
+def parse_int_arg(text: str, prefixes: tuple[str, ...]) -> tuple[bool, int | None]:
+    """`<前缀> <ID>` 单 ID 命令解析（纯函数，可测）。
+    命中前缀 → (True, ID)；裸命令（无 ID）→ (True, None)；非命令 → (False, None)。
+    兼容 `诊断：12` / `approve #5` / `diag  12`（多空白）。"""
+    t = (text or "").strip().lower()
+    for p in prefixes:
+        if t == p:
+            return True, None
+        for sep in (" ", "：", ":"):
+            if t.startswith(p + sep):
+                rest = t[len(p) + len(sep):].strip().lstrip("#").lstrip("：:")
+                return True, (int(rest) if rest.isdigit() else None)
+    return False, None
+
+
 def _tg_call(url: str, method: str, **payload):
     """Telegram Bot API 调用（返回 json 或抛异常；超时由调用方的轮询节奏兜底）。"""
     r = httpx.post(f"https://api.telegram.org/bot{url}/{method}",
@@ -249,6 +273,8 @@ def _unacked_crits() -> list[dict]:
 
 
 def _tg_reply(url: str, chat_id: str, text: str) -> None:
+    if len(text) > 3900:  # Telegram 单条上限 4096，留余量
+        text = text[:3900] + "\n…（已截断）"
     try:
         _tg_call(url, "sendMessage", chat_id=chat_id, text=text)
     except Exception:
@@ -268,8 +294,164 @@ def apply_acks(ids: list[int]) -> tuple[int, list[int]]:
     return done, targets
 
 
-def _handle_tg_command(text: str, chat_id: str) -> None:
-    """解析并执行一条聊天命令：ack <ids>（裸 ack=全部未确认 crit）/ list。"""
+def _help_text() -> str:
+    return i18n.t(
+        "可用命令：\n"
+        "status － 集群概览\n"
+        "list － 未确认 crit 告警\n"
+        "ack [ID] － 确认告警（裸 ack=全部）\n"
+        "ask <问题> － 向巡检助手提问（AI 关闭时走规则引擎）\n"
+        "diag <发现ID> － 立即诊断并回传根因\n"
+        "approve [提案ID] / reject [提案ID] － 审批提案（裸命令=看待批清单）\n"
+        "批准 ≠ 执行，执行请在面板完成。",
+        "Commands:\n"
+        "status — fleet overview\n"
+        "list — unacked crit alerts\n"
+        "ack [ID] — acknowledge (bare ack = all)\n"
+        "ask <question> — ask the patrol assistant (rules-engine fallback)\n"
+        "diag <finding_id> — diagnose now and return the root cause\n"
+        "approve [id] / reject [id] — decide proposals (bare = list pending)\n"
+        "Approval is not execution — run it from the panel.")
+
+
+def _status_text() -> str:
+    """集群概览文本：复用 fleet_snapshot（与面板/状态页同一数据源）。"""
+    from . import analysis
+    hosts = analysis.fleet_snapshot()["hosts"]
+    if not hosts:
+        return i18n.t("暂无主机。", "No hosts yet.")
+    online = sum(1 for h in hosts if h["online"])
+    scores = [h["score"] for h in hosts if h["score"] is not None]
+    avg = round(sum(scores) / len(scores)) if scores else None
+    crit = sum(1 for h in hosts if h["worst"] == "crit")
+    warn = sum(1 for h in hosts if h["worst"] == "warn")
+    head = i18n.t(f"概览：在线 {online}/{len(hosts)}", f"Overview: online {online}/{len(hosts)}")
+    if avg is not None:
+        head += i18n.t(f" ｜ 均分 {avg}", f" | avg score {avg}")
+    head += i18n.t(f" ｜ crit {crit} · warn {warn}", f" | crit {crit} · warn {warn}")
+    # 最需关注：健康分最低的 3 台，附其最严重发现标题
+    worst_rows = db.query(
+        "SELECT host_id, severity, title FROM findings WHERE status IN ('open','analyzed') "
+        "ORDER BY CASE severity WHEN 'crit' THEN 0 WHEN 'warn' THEN 1 ELSE 2 END, id DESC")
+    title_by: dict[int, str] = {}
+    for r in worst_rows:
+        title_by.setdefault(r["host_id"], r["title"])
+    lines = []
+    for h in sorted(hosts, key=lambda x: (x["score"] if x["score"] is not None else 999))[:3]:
+        if h["status"] == "offline":
+            lines.append(i18n.t(f"{h['name']}（离线）", f"{h['name']} (offline)"))
+        else:
+            t = title_by.get(h["id"], "")
+            lines.append(i18n.t(f"{h['name']}（{h['score']} 分，{h['status']}）{t}",
+                                f"{h['name']} ({h['score']}, {h['status']}) {t}"))
+    return head + "\n" + "\n".join(lines)
+
+
+def _pending_proposals_text() -> str:
+    rows = db.query(
+        "SELECT p.id, p.title, h.name AS host_name FROM proposals p JOIN hosts h ON h.id=p.host_id "
+        "WHERE p.status='pending' ORDER BY p.id DESC LIMIT 10")
+    if not rows:
+        return i18n.t("当前无待批提案。", "No pending proposals.")
+    lines = "\n".join(f"#{r['id']} [{r['host_name']}] {i18n.tr_proposal_title(r['title'])}" for r in rows)
+    return i18n.t(f"待批提案：\n{lines}\n回复 approve <ID> 批准，reject <ID> 拒绝。",
+                  f"Pending proposals:\n{lines}\nReply 'approve <ID>' or 'reject <ID>'.")
+
+
+async def _v2_command(text: str, low: str, url: str, cid: str) -> bool:
+    """v2 命令面（tg_command=on）：status / ask / diag / approve / reject / help。
+    返回是否消费了这条消息（消费则外层直接返回；未命中前缀保持 v1 的静默语义）。"""
+    from . import analysis
+    if low in ("help", "帮助", "/help", "/start"):
+        _tg_reply(url, cid, _help_text())
+        return True
+    if low in ("status", "概览", "overview"):
+        _tg_reply(url, cid, _status_text())
+        return True
+    t = (text or "").strip()
+    # ask <问题>：与面板 /api/chat 同一 chat_answer 链路（脱敏/工具循环/降级全继承）
+    tl = t.lower()
+    for p in ("ask", "问"):
+        if tl == p or tl.startswith(p + " ") or t.startswith(p + "：") or t.startswith(p + ":"):
+            q = t[len(p):].lstrip(" ：:").strip()
+            if not q:
+                _tg_reply(url, cid, i18n.t("用法：ask <问题>", "Usage: ask <question>"))
+                return True
+            out = await analysis.chat_answer(q)
+            _tg_reply(url, cid, (out.get("answer") or "").strip() or
+                      i18n.t("（助手没有给出回答）", "(no answer from the assistant)"))
+            return True
+    hit, fid = parse_int_arg(text, ("diag", "诊断"))
+    if hit:
+        if fid is None:
+            _tg_reply(url, cid, i18n.t("用法：diag <发现ID>（回复 list 查看ID）",
+                                       "Usage: diag <finding_id> (reply 'list' for IDs)"))
+            return True
+        f = db.query_one("SELECT * FROM findings WHERE id=?", (fid,))
+        h = db.query_one("SELECT * FROM hosts WHERE id=?", (f["host_id"],)) if f else None
+        if not f or not h:
+            _tg_reply(url, cid, i18n.t(f"发现 #{fid} 不存在。", f"Finding #{fid} not found."))
+            return True
+        card = await analysis.analyze_finding(h, f)
+        try:
+            from . import scheduler
+            await scheduler.broadcast("analysis",
+                                      i18n.t(f"agent 完成诊断: {f['title']}",
+                                             f"Agent diagnosis completed: {f['title']}"),
+                                      {"finding_id": fid})
+        except Exception:
+            pass  # 广播失败不影响诊断回执
+        prop = ""
+        if card.get("proposal_id"):
+            prop = i18n.t(f"\n已生成提案 #{card['proposal_id']}，回复 approve {card['proposal_id']} 批准。",
+                          f"\nProposal #{card['proposal_id']} created — reply 'approve {card['proposal_id']}' to approve.")
+        _tg_reply(url, cid, i18n.t(
+            f"诊断完成：{h['name']} — {f['title']}\n根因：{card.get('root_cause', '')}",
+            f"Diagnosis done: {h['name']} — {f['title']}\nRoot cause: {card.get('root_cause', '')}") + prop)
+        return True
+    for prefixes, action in ((("approve", "批准", "同意"), "approve"),
+                             (("reject", "拒绝", "驳回"), "reject")):
+        hit, pid = parse_int_arg(text, prefixes)
+        if not hit:
+            continue
+        if pid is None:
+            _tg_reply(url, cid, _pending_proposals_text())
+            return True
+        p = db.query_one("SELECT * FROM proposals WHERE id=?", (pid,))
+        if not p:
+            _tg_reply(url, cid, i18n.t(f"提案 #{pid} 不存在。", f"Proposal #{pid} not found."))
+            return True
+        if p["status"] != "pending":
+            _tg_reply(url, cid, i18n.t(f"提案 #{pid} 已处理（{p['status']}）。",
+                                       f"Proposal #{pid} already decided ({p['status']})."))
+            return True
+        status = "approved" if action == "approve" else "rejected"
+        db.execute("UPDATE proposals SET status=?, decided_at=? WHERE id=?", (status, db.now(), pid))
+        h = db.query_one("SELECT name FROM hosts WHERE id=?", (p["host_id"],))
+        verb = i18n.t("已批准", "approved") if action == "approve" else i18n.t("已拒绝", "rejected")
+        try:
+            from . import scheduler
+            await scheduler.broadcast("proposal",
+                                      i18n.t(f"提案{verb}: {p['title']}", f"Proposal {verb}: {p['title']}") +
+                                      (i18n.t(f"（Telegram 审批，主机 {h['name']}）",
+                                              f" (via Telegram, host {h['name']})") if h else ""),
+                                      {"proposal_id": pid})
+        except Exception:
+            pass
+        _tg_reply(url, cid, i18n.t(
+            f"提案 #{pid} {verb}：{p['title']}\n批准 ≠ 执行，执行请在面板完成。",
+            f"Proposal #{pid} {verb}: {p['title']}\nApproval is not execution — run it from the panel."))
+        return True
+    if low.startswith("/"):
+        _tg_reply(url, cid, _help_text())  # 未知斜杠命令给菜单，非命令文本保持静默
+        return True
+    return False
+
+
+async def _handle_tg_command(text: str, chat_id: str) -> None:
+    """解析并执行一条聊天命令。
+    v1（tg_ack）：ack <ids>（裸 ack=全部未确认 crit）/ list
+    v2（tg_command）：status / ask <问题> / diag <发现ID> / approve|reject [提案ID] / help"""
     c = conf()
     url, cid = c["url"], c["chat_id"]
     if str(chat_id) != str(cid):
@@ -300,18 +482,23 @@ def _handle_tg_command(text: str, chat_id: str) -> None:
                                       f"{done} alert(s) acknowledged via Telegram"), {}))
             except Exception:
                 pass  # 广播失败不影响确认
+        return
+    if _setting_on("tg_command"):
+        if await _v2_command(text, low, url, cid):
+            return
 
 
 async def tg_ack_loop():
-    """Telegram 长轮询循环：tg_ack=on 且渠道为 telegram 时由 main.py 启动。
+    """Telegram 长轮询循环：tg_ack 或 tg_command 任一开启且渠道为 telegram 时由 main.py 启动。
     getUpdates 无需公网回调 URL（自托管本地面板的零配置双向通道）。"""
     await asyncio.sleep(3)  # 等启动期采集落库
     while True:
         try:
-            if not _setting_on("tg_ack") or conf()["channel"] != "telegram" or not conf()["url"]:
+            c = conf()
+            if not (_setting_on("tg_ack") or _setting_on("tg_command")) \
+                    or c["channel"] != "telegram" or not c["url"]:
                 await asyncio.sleep(15)
                 continue
-            c = conf()
             offset = int((db.query_one("SELECT value FROM settings WHERE key='tg_ack_offset'")
                           or {}).get("value") or 0)
             data = _tg_call(c["url"], "getUpdates", offset=offset, timeout=30,
@@ -320,7 +507,7 @@ async def tg_ack_loop():
                 offset = max(offset, upd["update_id"] + 1)
                 msg = upd.get("message") or {}
                 if str(msg.get("chat", {}).get("id")) == str(c["chat_id"]) and msg.get("text"):
-                    _handle_tg_command(msg["text"], msg["chat"]["id"])
+                    await _handle_tg_command(msg["text"], msg["chat"]["id"])
             db.execute("INSERT INTO settings(key,value) VALUES('tg_ack_offset',?) "
                        "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(offset),))
         except Exception:

@@ -22,6 +22,13 @@ def set_broadcaster(fn):
     _notify_broadcast = fn
 
 
+async def broadcast(kind: str, message: str, data: dict | None = None):
+    """供 notify 等模块把事件推进面板事件流（main.py 启动时经 set_broadcaster 注入，
+    避免循环导入；未注入时静默跳过——回归测试无 SSE 面）。"""
+    if _notify_broadcast:
+        await _notify_broadcast(kind, message, data or {})
+
+
 def _setting_int(key: str, default: int) -> int:
     r = db.query_one("SELECT value FROM settings WHERE key=?", (key,))
     try:
