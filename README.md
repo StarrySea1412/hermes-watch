@@ -10,6 +10,8 @@
 
 **一句话**：Grafana/Netdata 把 AI 锁在云里按条收费，Hermes Watch 让一个懂运维的 agent 住进你自己的机器——自动巡检本地和云服务器、深挖根因、出可视化健康报告，全程数据不出本机。
 
+**工程底座**：Python + React + ECharts；119 文件 · 11 个测试文件 · chaos.sh 故障演练脚本。
+
 ## 界面一览
 
 ![Fleet 总览](docs/screenshots/fleet.png)
